@@ -154,6 +154,15 @@ def main() -> dict:
     plt.text(final_date, final_chatgpt + 0.5, f"{final_chatgpt - 100.0:.1f}%", color="blue", fontsize=9)
     plt.text(final_date, final_spx + 0.9, f"+{final_spx - 100.0:.1f}%", color="orange", fontsize=9)
 
+    # label ATYR's catalyst failure
+    plt.text(
+
+        pd.to_datetime("2025-09-13") + pd.Timedelta(days=0.5),
+        125,
+        f"ATYR falls ~80%",
+        color="red",
+        fontsize=9,
+    )
     # annotate max drawdown
     plt.text(
         dd_date + pd.Timedelta(days=0.5),
