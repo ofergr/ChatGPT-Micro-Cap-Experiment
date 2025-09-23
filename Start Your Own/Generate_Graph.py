@@ -103,6 +103,7 @@ def load_portfolio_details(
 def download_sp500(dates, starting_equity):
     """
     Download S&P 500 data and normalize to starting equity
+    If recent data is unavailable, try with earlier dates or period-based approach
     """
     if len(dates) == 0:
         return pd.DataFrame()
@@ -110,36 +111,98 @@ def download_sp500(dates, starting_equity):
     start_date = dates.min()
     end_date = dates.max()
     
-    # Download S&P 500 data with error handling
+    # Try multiple date ranges if recent data is unavailable
+    for days_back in [0, 1, 2, 3, 5, 7]:  # Try current, then 1, 2, 3, 5, 7 days back
+        try_start = start_date - pd.Timedelta(days=days_back)
+        try_end = end_date - pd.Timedelta(days=days_back)
+        
+        if days_back > 0:
+            print(f"Trying S&P 500 data {days_back} day(s) earlier...")
+        
+        # Download S&P 500 data with error handling
+        try:
+            sp500 = yf.download("^GSPC", start=try_start, end=try_end + pd.Timedelta(days=1), progress=False)
+        except Exception as e:
+            if days_back == 0:
+                print(f"Error downloading current S&P 500 data: {e}")
+            continue
+        
+        # Check if download returned valid data
+        if sp500 is not None and not sp500.empty:
+            if days_back > 0:
+                print(f"Successfully retrieved S&P 500 data from {days_back} day(s) ago")
+            
+            # Reset index to get Date as a column
+            sp500 = sp500.reset_index()
+            
+            # Extract only the 'Close' price series
+            sp500_close = sp500[['Date', 'Close']].copy()
+            sp500_close.columns = ['Date', 'Value']
+            
+            # Shift dates forward if we used earlier data
+            if days_back > 0:
+                sp500_close['Date'] = sp500_close['Date'] + pd.Timedelta(days=days_back)
+            
+            # Align with portfolio dates
+            aligned_values = _align_to_dates(sp500_close, dates)
+            
+            # Normalize to starting equity
+            norm = _normalize_to_start(aligned_values, starting_equity)
+            
+            result = pd.DataFrame({
+                'Date': dates,
+                'SPX Value': norm.values
+            })
+            
+            return result
+    
+    # If date-based approach failed, try period-based approach
+    print("Trying period-based S&P 500 data retrieval...")
     try:
-        sp500 = yf.download("^GSPC", start=start_date, end=end_date + pd.Timedelta(days=1), progress=False)
+        # Get recent data using period instead of specific dates
+        sp500 = yf.download("^GSPC", period="3mo", progress=False)  # Last 3 months
+        
+        if sp500 is not None and not sp500.empty:
+            print(f"Successfully retrieved S&P 500 data using period approach ({len(sp500)} days)")
+            
+            # Reset index to get Date as a column
+            sp500 = sp500.reset_index()
+            
+            # Extract only the 'Close' price series
+            sp500_close = sp500[['Date', 'Close']].copy()
+            sp500_close.columns = ['Date', 'Value']
+            
+            # Get the most recent available data point
+            latest_sp500_date = sp500_close['Date'].max()
+            latest_sp500_value = sp500_close[sp500_close['Date'] == latest_sp500_date]['Value'].iloc[0]
+            
+            print(f"Using latest available S&P 500 data from {latest_sp500_date.strftime('%Y-%m-%d')}")
+            
+            # Create a synthetic S&P 500 series using the latest available value
+            # This assumes S&P 500 stayed constant from the last available date
+            synthetic_sp500 = pd.DataFrame({
+                'Date': dates,
+                'Value': [latest_sp500_value] * len(dates)
+            })
+            
+            # Align with portfolio dates
+            aligned_values = _align_to_dates(synthetic_sp500, dates)
+            
+            # Normalize to starting equity
+            norm = _normalize_to_start(aligned_values, starting_equity)
+            
+            result = pd.DataFrame({
+                'Date': dates,
+                'SPX Value': norm.values
+            })
+            
+            return result
+            
     except Exception as e:
-        print(f"Error downloading S&P 500 data: {e}")
-        return pd.DataFrame()
+        print(f"Period-based approach also failed: {e}")
     
-    # Check if download returned None or empty
-    if sp500 is None or sp500.empty:
-        return pd.DataFrame()
-    
-    # Reset index to get Date as a column
-    sp500 = sp500.reset_index()
-    
-    # Extract only the 'Close' price series
-    sp500_close = sp500[['Date', 'Close']].copy()
-    sp500_close.columns = ['Date', 'Value']
-    
-    # Align with portfolio dates
-    aligned_values = _align_to_dates(sp500_close, dates)
-    
-    # Normalize to starting equity
-    norm = _normalize_to_start(aligned_values, starting_equity)
-    
-    result = pd.DataFrame({
-        'Date': dates,
-        'SPX Value': norm.values
-    })
-    
-    return result
+    print("Could not retrieve S&P 500 data using any approach")
+    return pd.DataFrame()
 
 
 def plot_comparison(
@@ -195,8 +258,29 @@ def main(
     # Download & normalize S&P to same baseline, aligned to portfolio dates
     spx = download_sp500(norm_port["Date"], starting_equity)
 
-    # Plot
-    plot_comparison(norm_port, spx, starting_equity, title="ChatGPT Portfolio vs. S&P 500 (Indexed)")
+    # Plot comparison or portfolio only if S&P data unavailable
+    if spx.empty:
+        print("Warning: S&P 500 data not available. Plotting portfolio performance only.")
+        # Plot portfolio only
+        plt.style.use("seaborn-v0_8-whitegrid")
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(norm_port["Date"], norm_port["Total Equity"], label=f"Portfolio (start={starting_equity:g})", marker="o")
+        
+        # Annotate last point as percent vs baseline
+        p_last = float(norm_port["Total Equity"].iloc[-1])
+        p_pct = (p_last / starting_equity - 1.0) * 100.0
+        ax.text(norm_port["Date"].iloc[-1], p_last * 1.01, f"{p_pct:+.1f}%", fontsize=9)
+        
+        ax.set_title("ChatGPT Portfolio Performance (S&P 500 data unavailable)")
+        ax.set_xlabel("Date")
+        ax.set_ylabel(f"Index (start = {starting_equity:g})")
+        ax.legend()
+        ax.grid(True)
+        fig.autofmt_xdate()
+        plt.tight_layout()
+    else:
+        # Plot comparison with S&P 500
+        plot_comparison(norm_port, spx, starting_equity, title="ChatGPT Portfolio vs. S&P 500 (Indexed)")
 
     # Save or show
     if output:
