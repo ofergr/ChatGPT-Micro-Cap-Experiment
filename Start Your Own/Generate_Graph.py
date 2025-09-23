@@ -9,12 +9,18 @@ Plot portfolio performance vs. S&P 500 with a configurable starting equity.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Optional, cast
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import yfinance as yf
+from alpha_vantage.timeseries import TimeSeries
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 DATA_DIR = Path(__file__).resolve().parent
 PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio_update.csv"
@@ -66,6 +72,69 @@ def _align_to_dates(sp500_data: pd.DataFrame, portfolio_dates: pd.Series) -> pd.
     return merged['Value']
 
 
+def get_sp500_from_alphavantage(dates, starting_equity):
+    """
+    Get S&P 500 data from Alpha Vantage API as fallback
+    """
+    try:
+        api_key = os.getenv('ALPHA_VANTAGE_API_KEY')
+        if not api_key:
+            print("Alpha Vantage API key not found in environment variables")
+            return pd.DataFrame()
+        
+        print("Trying Alpha Vantage API for S&P 500 data...")
+        ts = TimeSeries(key=api_key, output_format='pandas')
+        
+        # Get S&P 500 data using SPY ETF as proxy (more reliable than ^GSPC on Alpha Vantage)
+        data, meta_data = ts.get_daily('SPY', outputsize='compact')  # Last 100 days
+        
+        if data.empty:
+            print("No data returned from Alpha Vantage")
+            return pd.DataFrame()
+        
+        print(f"Successfully retrieved S&P 500 data from Alpha Vantage ({len(data)} days)")
+        
+        # Reset index to get Date as a column
+        data = data.reset_index()
+        data.columns = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume']
+        
+        # Extract only the 'Close' price series and rename
+        sp500_close = data[['Date', 'Close']].copy()
+        sp500_close.columns = ['Date', 'Value']
+        
+        # Convert Date column to datetime if it's not already
+        sp500_close['Date'] = pd.to_datetime(sp500_close['Date'])
+        
+        # Get the most recent available data point for comparison
+        latest_date = sp500_close['Date'].max()
+        latest_value = sp500_close[sp500_close['Date'] == latest_date]['Value'].iloc[0]
+        
+        print(f"Using latest Alpha Vantage S&P 500 data from {latest_date.strftime('%Y-%m-%d')}")
+        
+        # Create a synthetic S&P 500 series using the latest available value
+        synthetic_sp500 = pd.DataFrame({
+            'Date': dates,
+            'Value': [latest_value] * len(dates)
+        })
+        
+        # Align with portfolio dates
+        aligned_values = _align_to_dates(synthetic_sp500, dates)
+        
+        # Normalize to starting equity
+        norm = _normalize_to_start(aligned_values, starting_equity)
+        
+        result = pd.DataFrame({
+            'Date': dates,
+            'SPX Value': norm.values
+        })
+        
+        return result
+        
+    except Exception as e:
+        print(f"Alpha Vantage API error: {e}")
+        return pd.DataFrame()
+
+
 def load_portfolio_details(
     start_date: Optional[pd.Timestamp],
     end_date: Optional[pd.Timestamp],
@@ -103,7 +172,8 @@ def load_portfolio_details(
 def download_sp500(dates, starting_equity):
     """
     Download S&P 500 data and normalize to starting equity
-    If recent data is unavailable, try with earlier dates or period-based approach
+    1. Try Yahoo Finance for exact portfolio date range
+    2. Fallback to Alpha Vantage if Yahoo Finance fails
     """
     if len(dates) == 0:
         return pd.DataFrame()
@@ -111,26 +181,14 @@ def download_sp500(dates, starting_equity):
     start_date = dates.min()
     end_date = dates.max()
     
-    # Try multiple date ranges if recent data is unavailable
-    for days_back in [0, 1, 2, 3, 5, 7]:  # Try current, then 1, 2, 3, 5, 7 days back
-        try_start = start_date - pd.Timedelta(days=days_back)
-        try_end = end_date - pd.Timedelta(days=days_back)
-        
-        if days_back > 0:
-            print(f"Trying S&P 500 data {days_back} day(s) earlier...")
-        
-        # Download S&P 500 data with error handling
-        try:
-            sp500 = yf.download("^GSPC", start=try_start, end=try_end + pd.Timedelta(days=1), progress=False)
-        except Exception as e:
-            if days_back == 0:
-                print(f"Error downloading current S&P 500 data: {e}")
-            continue
+    # Step 1: Try Yahoo Finance for the exact date range
+    print(f"Getting S&P 500 data from Yahoo Finance for {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
+    try:
+        sp500 = yf.download("^GSPC", start=start_date, end=end_date + pd.Timedelta(days=1), progress=False)
         
         # Check if download returned valid data
         if sp500 is not None and not sp500.empty:
-            if days_back > 0:
-                print(f"Successfully retrieved S&P 500 data from {days_back} day(s) ago")
+            print(f"✅ Successfully retrieved S&P 500 data from Yahoo Finance ({len(sp500)} days)")
             
             # Reset index to get Date as a column
             sp500 = sp500.reset_index()
@@ -138,10 +196,6 @@ def download_sp500(dates, starting_equity):
             # Extract only the 'Close' price series
             sp500_close = sp500[['Date', 'Close']].copy()
             sp500_close.columns = ['Date', 'Value']
-            
-            # Shift dates forward if we used earlier data
-            if days_back > 0:
-                sp500_close['Date'] = sp500_close['Date'] + pd.Timedelta(days=days_back)
             
             # Align with portfolio dates
             aligned_values = _align_to_dates(sp500_close, dates)
@@ -155,53 +209,17 @@ def download_sp500(dates, starting_equity):
             })
             
             return result
-    
-    # If date-based approach failed, try period-based approach
-    print("Trying period-based S&P 500 data retrieval...")
-    try:
-        # Get recent data using period instead of specific dates
-        sp500 = yf.download("^GSPC", period="3mo", progress=False)  # Last 3 months
-        
-        if sp500 is not None and not sp500.empty:
-            print(f"Successfully retrieved S&P 500 data using period approach ({len(sp500)} days)")
-            
-            # Reset index to get Date as a column
-            sp500 = sp500.reset_index()
-            
-            # Extract only the 'Close' price series
-            sp500_close = sp500[['Date', 'Close']].copy()
-            sp500_close.columns = ['Date', 'Value']
-            
-            # Get the most recent available data point
-            latest_sp500_date = sp500_close['Date'].max()
-            latest_sp500_value = sp500_close[sp500_close['Date'] == latest_sp500_date]['Value'].iloc[0]
-            
-            print(f"Using latest available S&P 500 data from {latest_sp500_date.strftime('%Y-%m-%d')}")
-            
-            # Create a synthetic S&P 500 series using the latest available value
-            # This assumes S&P 500 stayed constant from the last available date
-            synthetic_sp500 = pd.DataFrame({
-                'Date': dates,
-                'Value': [latest_sp500_value] * len(dates)
-            })
-            
-            # Align with portfolio dates
-            aligned_values = _align_to_dates(synthetic_sp500, dates)
-            
-            # Normalize to starting equity
-            norm = _normalize_to_start(aligned_values, starting_equity)
-            
-            result = pd.DataFrame({
-                'Date': dates,
-                'SPX Value': norm.values
-            })
-            
-            return result
             
     except Exception as e:
-        print(f"Period-based approach also failed: {e}")
+        print(f"❌ Yahoo Finance failed: {e}")
     
-    print("Could not retrieve S&P 500 data using any approach")
+    # Step 2: Fallback to Alpha Vantage
+    print("Falling back to Alpha Vantage...")
+    alphavantage_data = get_sp500_from_alphavantage(dates, starting_equity)
+    if not alphavantage_data.empty:
+        return alphavantage_data
+    
+    print("❌ Could not retrieve S&P 500 data from any source")
     return pd.DataFrame()
 
 
