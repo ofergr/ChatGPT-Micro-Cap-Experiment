@@ -139,11 +139,11 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
                 if order_type == "m":
                     try:
-                        stop_loss = float(input("Enter stop loss (or 0 to skip): "))
-                        if stop_loss < 0:
+                        stop_loss_pct = float(input("Enter stop loss percentage (e.g., 8 for 8%, or 0 to skip): "))
+                        if stop_loss_pct < 0:
                             raise ValueError
                     except ValueError:
-                        print("Invalid stop loss. Buy cancelled.")
+                        print("Invalid stop loss percentage. Buy cancelled.")
                         continue
 
                     s, e = trading_day_window()
@@ -155,10 +155,16 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
                     o = float(data["Open"].iloc[-1]) if "Open" in data else float(data["Close"].iloc[-1])
                     exec_price = round(o, 2)
+                    # Calculate stop loss price from percentage
+                    stop_loss = round(exec_price * (1 - stop_loss_pct / 100), 2) if stop_loss_pct > 0 else 0.0
+                    
                     notional = exec_price * shares
                     if notional > cash:
                         print(f"MOO buy for {ticker} failed: cost {notional:.2f} exceeds cash {cash:.2f}.")
                         continue
+                    
+                    if stop_loss_pct > 0:
+                        print(f"Stop loss set at {stop_loss_pct}% = ${stop_loss:.2f}")
 
                     # Log to trade log CSV
                     log = {
@@ -220,9 +226,13 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                 elif order_type == "l":
                     try:
                         buy_price = float(input("Enter buy LIMIT price: "))
-                        stop_loss = float(input("Enter stop loss (or 0 to skip): "))
-                        if buy_price <= 0 or stop_loss < 0:
+                        stop_loss_pct = float(input("Enter stop loss percentage (e.g., 8 for 8%, or 0 to skip): "))
+                        if buy_price <= 0 or stop_loss_pct < 0:
                             raise ValueError
+                        # Calculate stop loss price from percentage
+                        stop_loss = round(buy_price * (1 - stop_loss_pct / 100), 2) if stop_loss_pct > 0 else 0.0
+                        if stop_loss_pct > 0:
+                            print(f"Stop loss set at {stop_loss_pct}% = ${stop_loss:.2f}")
                     except ValueError:
                         print("Invalid input. Limit buy cancelled.")
                         continue
