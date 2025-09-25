@@ -28,6 +28,8 @@ import pandas as pd
 import yfinance as yf
 import json
 import logging
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill
 
 # Optional pandas-datareader import for Stooq access
 try:
@@ -64,7 +66,8 @@ def _effective_now() -> datetime:
 # ------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = SCRIPT_DIR  # Save files alongside this script by default
-PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio_update.csv"
+PORTFOLIO_EXCEL = DATA_DIR / "chatgpt_portfolio_update.xlsx"
+PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio.csv" # New variable for portfolio CSV
 TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
 DEFAULT_BENCHMARKS = ["IWO", "XBI", "SPY", "IWM"]
 
@@ -77,7 +80,8 @@ def _log_initial_state():
     logger.info("=== Trading Script Initial Configuration ===")
     logger.info("Script directory: %s", SCRIPT_DIR)
     logger.info("Data directory: %s", DATA_DIR)
-    logger.info("Portfolio CSV: %s", PORTFOLIO_CSV)
+    logger.info("Portfolio Excel: %s", PORTFOLIO_EXCEL)
+    logger.info("Portfolio CSV: %s", PORTFOLIO_CSV) # Log the new portfolio CSV path
     logger.info("Trade log CSV: %s", TRADE_LOG_CSV)
     logger.info("Default benchmarks: %s", DEFAULT_BENCHMARKS)
     logger.info("==============================================")
@@ -408,14 +412,15 @@ def download_price_data(ticker: str, **kwargs: Any) -> FetchResult:
 # ------------------------------
 
 def set_data_dir(data_dir: Path) -> None:
-    global DATA_DIR, PORTFOLIO_CSV, TRADE_LOG_CSV
+    global DATA_DIR, PORTFOLIO_EXCEL, PORTFOLIO_CSV, TRADE_LOG_CSV # Added PORTFOLIO_CSV
     logger.info("Setting data directory: %s", data_dir)
     DATA_DIR = Path(data_dir)
     logger.debug("Creating data directory if it doesn't exist: %s", DATA_DIR)
     os.makedirs(DATA_DIR, exist_ok=True)
-    PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio_update.csv"
+    PORTFOLIO_EXCEL = DATA_DIR / "chatgpt_portfolio_update.xlsx"
+    PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio.csv" # Set the new portfolio CSV path
     TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
-    logger.info("Data directory configured - Portfolio CSV: %s, Trade Log CSV: %s", PORTFOLIO_CSV, TRADE_LOG_CSV)
+    logger.info("Data directory configured - Portfolio Excel: %s, Portfolio CSV: %s, Trade Log CSV: %s", PORTFOLIO_EXCEL, PORTFOLIO_CSV, TRADE_LOG_CSV)
 
 
 # ------------------------------
@@ -583,7 +588,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     s, e = trading_day_window()
     for _, stock in portfolio_df.iterrows():
         ticker = str(stock["ticker"]).upper()
-        shares = int(stock["shares"]) if not pd.isna(stock["shares"]) else 0
+        shares = float(stock["shares"]) if not pd.isna(stock["shares"]) else 0.0
         cost = float(stock["buy_price"]) if not pd.isna(stock["buy_price"]) else 0.0
         cost_basis = float(stock["cost_basis"]) if not pd.isna(stock["cost_basis"]) else cost * shares
         stop = float(stock["stop_loss"]) if not pd.isna(stock["stop_loss"]) else 0.0
@@ -735,7 +740,10 @@ def log_manual_buy(
         print(f"Manual buy for {ticker} failed: no market data available (source={fetch.source}).")
         return cash, chatgpt_portfolio
 
-    o = float(data.get("Open", [np.nan])[-1])
+    if "Open" in data.columns and not data["Open"].empty:
+        o = float(data["Open"].iloc[-1])
+    else:
+        o = np.nan
     h = float(data["High"].iloc[-1])
     l = float(data["Low"].iloc[-1])
     if np.isnan(o):
@@ -839,8 +847,9 @@ If this is a mistake, enter 1, or hit Enter."""
         return cash, chatgpt_portfolio
 
     ticker_row = chatgpt_portfolio[chatgpt_portfolio["ticker"] == ticker]
-    total_shares = int(ticker_row["shares"].item())
-    if shares_sold > total_shares:
+    total_shares = float(ticker_row["shares"].item())
+    # Add small tolerance for floating point precision issues
+    if shares_sold > (total_shares + 1e-6):
         print(f"Manual sell for {ticker} failed: trying to sell {shares_sold} shares but only own {total_shares}.")
         return cash, chatgpt_portfolio
 
