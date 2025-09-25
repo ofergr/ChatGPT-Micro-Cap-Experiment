@@ -66,28 +66,12 @@ def load_latest_portfolio_state_excel(data_dir: Path) -> tuple[pd.DataFrame, flo
     # Extract individual stock positions (exclude TOTAL)
     stocks = latest_entries[latest_entries['Ticker'] != 'TOTAL'].copy()
     
-    # Get cash balance from TOTAL row - use direct Excel reading for accuracy
-    from openpyxl import load_workbook
-    
-    try:
-        wb = load_workbook(data_dir / "chatgpt_portfolio_update.xlsx")
-        ws = wb['Portfolio']
-        
-        # Find the most recent TOTAL row and get cash from Cash Balance column (L)
-        cash = 0.0
-        for row_idx in range(ws.max_row, 1, -1):  # Search backwards from last row
-            if ws[f'B{row_idx}'].value == 'TOTAL':  # Ticker column
-                cash_cell = ws[f'L{row_idx}']  # Cash Balance column
-                if cash_cell.value is not None and str(cash_cell.value).replace('.','').replace('-','').isdigit():
-                    cash = float(cash_cell.value)
-                    print(f"💰 Found cash balance ${cash} from row {row_idx}")
-                    break
-    except Exception as e:
-        print(f"⚠️  Could not read cash from Excel directly: {e}")
-        # Fallback to pandas method
-        total_row = latest_entries[latest_entries['Ticker'] == 'TOTAL']
-        if not total_row.empty and pd.notna(total_row['Cash Balance'].iloc[0]):
-            cash = float(total_row['Cash Balance'].iloc[0])
+    # Get cash balance from TOTAL row - use pandas method (handles formulas better)
+    cash = 0.0
+    total_row = latest_entries[latest_entries['Ticker'] == 'TOTAL']
+    if not total_row.empty and pd.notna(total_row['Cash Balance'].iloc[0]):
+        cash = float(total_row['Cash Balance'].iloc[0])
+        print(f"💰 Found cash balance ${cash:.2f} from latest TOTAL row")
     
     # Convert to the format expected by the trading script
     # For each ticker, get the LATEST row (in case of multiple rows like SELL then BUY)
@@ -616,13 +600,11 @@ def daily_results_excel(chatgpt_portfolio: pd.DataFrame, cash: float, data_dir: 
     holdings_df = pd.DataFrame(holdings_data)
     print(holdings_df.to_string(index=True))
     
-def main_excel(data_dir: Path = None, analysis_only: bool = True):
+def main_excel(data_dir: Path = None):
     """Main function for Excel-based trading script.
     
     Args:
         data_dir: Path to data directory
-        analysis_only: If True (default), only generate reports without modifying Excel.
-                      If False, enable interactive trading mode.
     """
     
     # Set up data directory
@@ -641,15 +623,9 @@ def main_excel(data_dir: Path = None, analysis_only: bool = True):
         print(str(e))
         return
     
-    if analysis_only:
-        # Analysis-only mode (default): just generate reports, don't modify Excel
-        print("📊 Analysis Mode: Generating report from existing Excel data")
-        daily_results_excel(chatgpt_portfolio, cash, data_directory)
-    else:
-        # Interactive trading mode: allow trades and Excel modifications
-        print("💰 Trading Mode: Interactive trading enabled")
-        updated_portfolio, updated_cash = process_portfolio_excel(chatgpt_portfolio, cash, data_directory, interactive=True)
-        daily_results_excel(updated_portfolio, updated_cash, data_directory)
+    # Always run interactive mode (like original script)
+    updated_portfolio, updated_cash = process_portfolio_excel(chatgpt_portfolio, cash, data_directory, interactive=True)
+    daily_results_excel(updated_portfolio, updated_cash, data_directory)
 
 if __name__ == "__main__":
     import argparse
@@ -657,7 +633,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Excel-compatible Portfolio Trading Script")
     parser.add_argument("--data-dir", type=str, help="Data directory path")
     parser.add_argument("--log-level", type=str, default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
-    parser.add_argument("--trading-mode", action="store_true", help="Enable interactive trading mode (default: analysis-only)")
     
     args = parser.parse_args()
     
@@ -669,8 +644,7 @@ if __name__ == "__main__":
     
     logger.info(f"Script started with arguments: {vars(args)}")
     
-    # Run main function
+    # Run main function (always interactive like original script)
     main_excel(
-        data_dir=Path(args.data_dir) if args.data_dir else None,
-        analysis_only=not args.trading_mode  # Default to analysis_only=True unless --trading-mode is specified
+        data_dir=Path(args.data_dir) if args.data_dir else None
     )
