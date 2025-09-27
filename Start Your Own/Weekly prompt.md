@@ -1,5 +1,16 @@
-"You are a professional-grade portfolio analyst. Use deep research to reevaluate your portfolio.
-You can check current holdings and/or find new stocks. You MUST provide exact order details — order type, date, limit pricing, specific instructions (if needed), stop-loss for buys, etc. must be provided. Remember, you have complete control as long as it is up to 1B$ market (buy, sell, etc.).
-Use technical and fondemental analysis for your research.
-You can buy anything as long as you have the capital available (right now you have X in cash). Here is your current portfolio: (insert current portfolio). Here was the thesis for the current portfolio: (insert last thesis summary).
-Remember, your only goal is alpha. At the bottom, please write a short summary so you can have a thesis review for next week."
+Portfolio Review and Action:
+
+The current portfolio (shares @ entry price, Stop-Loss) is:
+PVLA (2.60 @ $57.69, Stop: $53.07)
+VNDA (31.51 @ $4.76, Stop: $4.40)
+ARVN (20.08 @ $7.47, Stop: $6.90)
+VCYT (18.91 @ $7.93, Stop: $7.78)
+Cash: $0.00
+
+Please provide:
+1. The current share price for PVLA, VNDA, ARVN, and VCYT.
+2. The current cash balance (including any funds from sales triggered last week).
+3. A recommendation to HOLD, SELL (if stop-loss hit/breached), or ADJUST STOP for each held position.
+4. based on the cash availablity, recommend new micro-cap (<1B$ market) stocks to complete the portfolio to 4 stocks. The cash
+   should be divided evenly between the new stocks unless risk management suggests otherwise (no stcok should take more than
+   30% of the entire portfolio)
