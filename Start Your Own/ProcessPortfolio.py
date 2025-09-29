@@ -10,7 +10,6 @@ from trading_script import main
 
 
 if __name__ == "__main__":
-
     data_dir = Path(__file__).resolve().parent
-    main(Path("Start Your Own"))
+    main(data_dir)
 

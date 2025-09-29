@@ -418,9 +418,38 @@ def set_data_dir(data_dir: Path) -> None:
     logger.debug("Creating data directory if it doesn't exist: %s", DATA_DIR)
     os.makedirs(DATA_DIR, exist_ok=True)
     PORTFOLIO_EXCEL = DATA_DIR / "chatgpt_portfolio_update.xlsx"
-    PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio.csv" # Set the new portfolio CSV path
+    PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio.csv" # Kept for backward compatibility
     TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
     logger.info("Data directory configured - Portfolio Excel: %s, Portfolio CSV: %s, Trade Log CSV: %s", PORTFOLIO_EXCEL, PORTFOLIO_CSV, TRADE_LOG_CSV)
+
+
+# ------------------------------
+# Excel helper functions
+# ------------------------------
+
+def read_portfolio_from_excel() -> pd.DataFrame:
+    """Read portfolio data from Excel file."""
+    try:
+        logger.info("Reading Excel file: %s", PORTFOLIO_EXCEL)
+        df = pd.read_excel(PORTFOLIO_EXCEL, sheet_name=0)
+        logger.info("Successfully read Excel file: %s", PORTFOLIO_EXCEL)
+        return df
+    except FileNotFoundError:
+        logger.info("Excel file not found: %s. Creating empty DataFrame.", PORTFOLIO_EXCEL)
+        return pd.DataFrame()
+    except Exception as e:
+        logger.warning("Error reading Excel file %s: %s. Creating empty DataFrame.", PORTFOLIO_EXCEL, e)
+        return pd.DataFrame()
+
+def save_portfolio_to_excel(df: pd.DataFrame) -> None:
+    """Save portfolio data to Excel file."""
+    try:
+        logger.info("Writing Excel file: %s", PORTFOLIO_EXCEL)
+        df.to_excel(PORTFOLIO_EXCEL, index=False, sheet_name="Portfolio")
+        logger.info("Successfully wrote Excel file: %s", PORTFOLIO_EXCEL)
+    except Exception as e:
+        logger.error("Error writing Excel file %s: %s", PORTFOLIO_EXCEL, e)
+        raise
 
 
 # ------------------------------
@@ -653,16 +682,18 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     results.append(total_row)
 
     df_out = pd.DataFrame(results)
-    if PORTFOLIO_CSV.exists():
-        logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-        existing = pd.read_csv(PORTFOLIO_CSV)
-        logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+    
+    # Read existing Excel data and remove today's entries to avoid duplicates
+    existing = read_portfolio_from_excel()
+    if not existing.empty:
         existing = existing[existing["Date"] != str(today_iso)]
-        print("Saving results to CSV...")
+        print("Saving results to Excel...")
         df_out = pd.concat([existing, df_out], ignore_index=True)
-    logger.info("Writing CSV file: %s", PORTFOLIO_CSV)
-    df_out.to_csv(PORTFOLIO_CSV, index=False)
-    logger.info("Successfully wrote CSV file: %s", PORTFOLIO_CSV)
+    else:
+        print("Creating new Excel file...")
+    
+    # Save to Excel
+    save_portfolio_to_excel(df_out)
 
     return portfolio_df, cash
 
@@ -951,10 +982,8 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
         except Exception as e:
             raise Exception(f"Download for {ticker} failed. {e} Try checking internet connection.")
 
-    # Read portfolio history
-    logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-    chatgpt_df = pd.read_csv(PORTFOLIO_CSV)
-    logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+    # Read portfolio history from Excel
+    chatgpt_df = read_portfolio_from_excel()
 
     # Use only TOTAL rows, sorted by date
     totals = chatgpt_df[chatgpt_df["Ticker"] == "TOTAL"].copy()
@@ -1163,23 +1192,18 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
 # ------------------------------
 
 def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
-    """Load the most recent portfolio snapshot and cash balance from global PORTFOLIO_CSV."""
-    logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-    try:
-        df = pd.read_csv(PORTFOLIO_CSV)
-    except FileNotFoundError as e:
-        raise FileNotFoundError(
-        f"Could not find portfolio CSV at {PORTFOLIO_CSV}.\n"
-        "Make sure you're not running trading_script.py directly without the necessary file.\n"
-        "To fix this, either:\n"
-        "  1) Run the wrapper file: 'Start Your Own/ProcessPortfolio.py',\n"
-        "  2) Run: python trading_script.py --data-dir 'Start Your Own'"
-    ) from e
-
-    logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+    """Load the most recent portfolio snapshot and cash balance from Excel file."""
+    df = read_portfolio_from_excel()
+    
     if df.empty:
-        portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
-        print("Portfolio CSV is empty. Returning set amount of cash for creating portfolio.")
+        # Check if the Excel file exists but is empty or if it doesn't exist
+        if PORTFOLIO_EXCEL.exists():
+            portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
+            print("Portfolio Excel is empty. Returning set amount of cash for creating portfolio.")
+        else:
+            portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
+            print("Portfolio Excel file not found. Creating new portfolio.")
+        
         try:
             cash = float(input("What would you like your starting cash amount to be? "))
         except ValueError:
@@ -1203,7 +1227,9 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
             "Action",
             "Current Price",
             "PnL",
+            "PnL %",
             "Total Value",
+            "Notes",
         ],
         inplace=True,
         errors="ignore",
@@ -1218,12 +1244,34 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
         },
         inplace=True,
     )
+    
+    # Fill missing cost_basis with shares * buy_price
+    for idx in latest_tickers.index:
+        if pd.isna(latest_tickers.at[idx, 'cost_basis']):
+            shares = latest_tickers.at[idx, 'shares']
+            buy_price = latest_tickers.at[idx, 'buy_price']
+            if not pd.isna(shares) and not pd.isna(buy_price):
+                latest_tickers.at[idx, 'cost_basis'] = float(shares) * float(buy_price)
+    
+    # Fill missing stop_loss with 0
+    latest_tickers['stop_loss'] = latest_tickers['stop_loss'].fillna(0)
+    
     latest_tickers = latest_tickers.reset_index(drop=True).to_dict(orient="records")
 
     df_total = df[df["Ticker"] == "TOTAL"].copy()
     df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
-    latest = df_total.sort_values("Date").iloc[-1]
-    cash = float(latest["Cash Balance"])
+    
+    # Find the latest TOTAL row with a valid (non-NaN) cash balance
+    valid_total = df_total[pd.notna(df_total["Cash Balance"])]
+    if valid_total.empty:
+        # No valid cash balance found - start fresh
+        try:
+            cash = float(input("No valid cash balance found in Excel. What would you like your starting cash amount to be? "))
+        except ValueError:
+            raise ValueError("Cash could not be converted to float datatype. Please enter a valid number.")
+    else:
+        latest = valid_total.sort_values("Date").iloc[-1]
+        cash = float(latest["Cash Balance"])
     return latest_tickers, cash
 
 

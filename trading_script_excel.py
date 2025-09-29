@@ -54,14 +54,40 @@ def load_latest_portfolio_state_excel(data_dir: Path) -> tuple[pd.DataFrame, flo
         return pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"]), 0.0
     
     # Get the most recent date's portfolio state
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df = df.dropna(subset=['Date'])
+    # Handle mixed date formats by converting everything consistently
+    df['Date_Clean'] = pd.to_datetime(df['Date'], errors='coerce')
+    
+    # Also try to parse string dates manually
+    for idx, row in df.iterrows():
+        if pd.isna(df.loc[idx, 'Date_Clean']) and pd.notna(row['Date']):
+            try:
+                # Try parsing as string
+                df.loc[idx, 'Date_Clean'] = pd.to_datetime(str(row['Date']))
+            except:
+                pass
+    
+    # Remove rows with invalid dates or empty ticker
+    df = df.dropna(subset=['Date_Clean'])
+    df = df[df['Ticker'].notna() & (df['Ticker'] != '')]
     
     if df.empty:
         return pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"]), 0.0
     
-    latest_date = df['Date'].max()
-    latest_entries = df[df['Date'] == latest_date].copy()
+    # Get today's date in string format to match what we expect
+    today_str = last_trading_date().strftime("%Y-%m-%d")
+    today_dt = pd.to_datetime(today_str)
+    
+    # Look for today's data first
+    today_entries = df[df['Date_Clean'] == today_dt]
+    
+    if not today_entries.empty:
+        print(f"📅 Found {len(today_entries)} entries for today ({today_str})")
+        latest_entries = today_entries.copy()
+    else:
+        # Fall back to most recent date
+        latest_date = df['Date_Clean'].max()
+        latest_entries = df[df['Date_Clean'] == latest_date].copy()
+        print(f"📅 Using most recent date: {latest_date.strftime('%Y-%m-%d')} ({len(latest_entries)} entries)")
     
     # Extract individual stock positions (exclude TOTAL)
     stocks = latest_entries[latest_entries['Ticker'] != 'TOTAL'].copy()
@@ -106,7 +132,7 @@ def process_portfolio_excel(
 ) -> tuple[pd.DataFrame, float]:
     """Excel-compatible version of process_portfolio that saves results to Excel."""
     
-    today_iso = last_trading_date().date().isoformat()
+    today_date = last_trading_date().date()  # Use date object for consistency
     portfolio_df = _ensure_df(portfolio)
 
     results: list[dict] = []
@@ -138,10 +164,15 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                     continue
 
                 if order_type == "m":
+                    # Handle stop loss percentage with empty input support
+                    stop_loss_input = input("Enter stop loss percentage (e.g., 8 for 8%, or press Enter to skip): ").strip()
                     try:
-                        stop_loss_pct = float(input("Enter stop loss percentage (e.g., 8 for 8%, or 0 to skip): "))
-                        if stop_loss_pct < 0:
-                            raise ValueError
+                        if stop_loss_input == "":
+                            stop_loss_pct = 0.0
+                        else:
+                            stop_loss_pct = float(stop_loss_input)
+                            if stop_loss_pct < 0:
+                                raise ValueError
                     except ValueError:
                         print("Invalid stop loss percentage. Buy cancelled.")
                         continue
@@ -168,7 +199,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
                     # Log to trade log CSV
                     log = {
-                        "Date": today_iso,
+                        "Date": today_date.strftime("%Y-%m-%d"),
                         "Ticker": ticker,
                         "Shares Bought": shares,
                         "Buy Price": exec_price,
@@ -226,15 +257,30 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                 elif order_type == "l":
                     try:
                         buy_price = float(input("Enter buy LIMIT price: "))
-                        stop_loss_pct = float(input("Enter stop loss percentage (e.g., 8 for 8%, or 0 to skip): "))
-                        if buy_price <= 0 or stop_loss_pct < 0:
+                        if buy_price <= 0:
                             raise ValueError
+                    except ValueError:
+                        print("Invalid buy price. Limit buy cancelled.")
+                        continue
+                    
+                    # Handle stop loss percentage with empty input support
+                    stop_loss_input = input("Enter stop loss percentage (e.g., 8 for 8%, or press Enter to skip): ").strip()
+                    try:
+                        if stop_loss_input == "":
+                            stop_loss_pct = 0.0
+                        else:
+                            stop_loss_pct = float(stop_loss_input)
+                            if stop_loss_pct < 0:
+                                raise ValueError
+                        
                         # Calculate stop loss price from percentage
                         stop_loss = round(buy_price * (1 - stop_loss_pct / 100), 2) if stop_loss_pct > 0 else 0.0
                         if stop_loss_pct > 0:
                             print(f"Stop loss set at {stop_loss_pct}% = ${stop_loss:.2f}")
+                        else:
+                            print("No stop loss set.")
                     except ValueError:
-                        print("Invalid input. Limit buy cancelled.")
+                        print("Invalid stop loss percentage. Limit buy cancelled.")
                         continue
 
                     cash, portfolio_df = log_manual_buy(
@@ -269,8 +315,12 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             break  # proceed to pricing
 
     # ------- Daily pricing + stop-loss execution -------
+    # Only process stocks that are currently in the portfolio (shares > 0)
     s, e = trading_day_window()
-    for _, stock in portfolio_df.iterrows():
+    current_stocks = portfolio_df[portfolio_df['shares'] > 0].copy()
+    print(f"📊 Processing {len(current_stocks)} current holdings for {today_date}")
+    
+    for _, stock in current_stocks.iterrows():
         ticker = str(stock["ticker"]).upper()
         shares = float(stock["shares"]) if not pd.isna(stock["shares"]) else 0.0
         cost = float(stock["buy_price"]) if not pd.isna(stock["buy_price"]) else 0.0
@@ -283,8 +333,8 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
         if data.empty:
             print(f"No data for {ticker} (source={fetch.source}).")
             row = {
-                "Date": today_iso, "Ticker": ticker, "Shares": shares,
-                "Buy Price": cost, "Cost Basis": cost_basis, "Stop Loss": stop,
+                "Date": today_date.strftime("%Y-%m-%d"), "Ticker": ticker, "Shares": shares,
+                "Buy Price": cost, "Cost Basis": None, "Stop Loss": stop,
                 "Current Price": None, "Total Value": None, "PnL": None, "PnL %": None,
                 "Action": "NO DATA", "Cash Balance": 0, "Total Equity": None, "Notes": None,
             }
@@ -305,20 +355,34 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             cash += cash_from_sale  # Update total cash
             portfolio_df = log_sell(ticker, shares, exec_price, cost, exec_price * shares - cost * shares, portfolio_df)
             row = {
-                "Date": today_iso, "Ticker": ticker, "Shares": 0,  # Shares sold, now 0
-                "Buy Price": cost, "Cost Basis": cost_basis, "Stop Loss": stop,
+                "Date": today_date.strftime("%Y-%m-%d"), "Ticker": ticker, "Shares": shares,  # Show shares sold (not 0)
+                "Buy Price": cost, "Cost Basis": None, "Stop Loss": stop,
                 "Current Price": exec_price, "Total Value": None, "PnL": None, "PnL %": None,
-                "Action": action, "Cash Balance": round(cash_from_sale, 2), "Total Equity": None, "Notes": None,
+                "Action": action, "Cash Balance": None, "Total Equity": None, "Notes": None,
             }
         else:
             price = round(c, 2)
-            action = "HOLD"
+            
+            # Determine if this is a BUY (new purchase today) or HOLD (existing position)
+            # Check if this ticker was purchased today by looking at trade log
+            action = "HOLD"  # Default for existing positions
+            trade_log_path = data_dir / "chatgpt_trade_log.csv"
+            if trade_log_path.exists():
+                trade_log = pd.read_csv(trade_log_path)
+                today_buys = trade_log[
+                    (trade_log['Date'] == today_date.strftime('%Y-%m-%d')) & 
+                    (trade_log['Ticker'] == ticker) & 
+                    (trade_log['Shares Bought'].notna())
+                ]
+                if not today_buys.empty:
+                    action = "BUY"  # This stock was purchased today
+            
             # Check if this stock had a manual sell and update cash balance accordingly
             cash_balance = manual_sells.get(ticker, 0)
             # Don't calculate totals here - let Excel formulas handle it
             row = {
-                "Date": today_iso, "Ticker": ticker, "Shares": shares,
-                "Buy Price": cost, "Cost Basis": cost_basis, "Stop Loss": stop,
+                "Date": today_date.strftime("%Y-%m-%d"), "Ticker": ticker, "Shares": shares,
+                "Buy Price": cost, "Cost Basis": None, "Stop Loss": stop,
                 "Current Price": price, "Total Value": None, "PnL": None, "PnL %": None,
                 "Action": action, "Cash Balance": round(cash_balance, 2), "Total Equity": None, "Notes": None,
             }
@@ -327,7 +391,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
     # Add TOTAL row - let Excel SUM formulas calculate the totals
     total_row = {
-        "Date": today_iso, "Ticker": "TOTAL", "Shares": None, "Buy Price": None,
+        "Date": today_date.strftime("%Y-%m-%d"), "Ticker": "TOTAL", "Shares": None, "Buy Price": None,
         "Cost Basis": None, "Stop Loss": None, "Current Price": None,
         "Total Value": None, "PnL": None, "PnL %": None,  # Leave empty for Excel formulas
         "Action": None, "Cash Balance": round(cash, 2),
@@ -347,7 +411,7 @@ def save_portfolio_results_excel(results_df: pd.DataFrame, data_dir: Path) -> No
     from openpyxl.utils.dataframe import dataframe_to_rows
     
     excel_path = data_dir / "chatgpt_portfolio_update.xlsx"
-    today_iso = last_trading_date().date().isoformat()
+    today_date = last_trading_date().date()
     
     if not excel_path.exists():
         # If file doesn't exist, create it
@@ -364,13 +428,19 @@ def save_portfolio_results_excel(results_df: pd.DataFrame, data_dir: Path) -> No
         # Find rows with today's date and remove them
         rows_to_delete = []
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            if row[0] == today_iso:  # Date column
+            row_date = row[0]
+            if isinstance(row_date, str):
+                row_date = pd.to_datetime(row_date).date()
+            elif hasattr(row_date, 'date'):
+                row_date = row_date.date()
+            
+            if row_date == today_date:  # Date column
                 rows_to_delete.append(row_idx)
         
         # Delete rows in reverse order to maintain indices
         for row_idx in reversed(rows_to_delete):
             ws.delete_rows(row_idx)
-            logger.info(f"Removed existing data for {today_iso} from row {row_idx}")
+            logger.info(f"Removed existing data for {today_date} from row {row_idx}")
         
         # Add new data at the end and insert formulas
         start_row = ws.max_row + 1
@@ -380,14 +450,18 @@ def save_portfolio_results_excel(results_df: pd.DataFrame, data_dir: Path) -> No
             
             # Add formulas for individual stock rows (not TOTAL rows)
             if row[1] != 'TOTAL':  # Ticker column
+                # Cost Basis = 0 for SELL, Shares * Buy Price for others
+                ws[f'E{current_row}'] = f'=IF(ISNUMBER(SEARCH("SELL",K{current_row})),0,IF(AND(C{current_row}<>"",D{current_row}<>""),C{current_row}*D{current_row},""))'
                 # Total Value = Shares * Current Price (C * G)
-                ws[f'H{current_row}'] = f'=C{current_row}*G{current_row}'
-                # P&L = (Current Price - Buy Price) * Shares ((G - D) * C)
-                ws[f'I{current_row}'] = f'=(G{current_row}-D{current_row})*C{current_row}'
-                # P&L % = (Current Price - Buy Price) / Buy Price * 100 ((G - D) / D * 100)
-                ws[f'J{current_row}'] = f'=(G{current_row}-D{current_row})/D{current_row}*100'
-                # Total Equity = Total Value + Cash Balance (H + L)
-                ws[f'M{current_row}'] = f'=H{current_row}+L{current_row}'
+                ws[f'H{current_row}'] = f'=IF(AND(C{current_row}<>"",G{current_row}<>""),C{current_row}*G{current_row},"")'
+                # P&L = (Current Price - Buy Price) * Shares
+                ws[f'I{current_row}'] = f'=IF(AND(C{current_row}<>"",D{current_row}<>"",G{current_row}<>""),C{current_row}*(G{current_row}-D{current_row}),"")'
+                # P&L % = (Current Price - Buy Price) / Buy Price * 100
+                ws[f'J{current_row}'] = f'=IF(AND(D{current_row}<>"",D{current_row}<>0,G{current_row}<>""),((G{current_row}-D{current_row})/D{current_row})*100,"")'
+                # Cash Balance = +Total Value for SELL, -Total Value for BUY, 0 for HOLD
+                ws[f'L{current_row}'] = f'=IF(ISNUMBER(SEARCH("SELL",K{current_row})),H{current_row},IF(ISNUMBER(SEARCH("BUY",K{current_row})),-H{current_row},0))'
+                # Total Equity = IF SELL transaction, use P&L, otherwise Total Value (market value)
+                ws[f'M{current_row}'] = f'=IF(ISNUMBER(SEARCH("SELL",K{current_row})),I{current_row},H{current_row})'
             else:
                 # TOTAL row formulas - need to find the range of individual stock rows for today
                 stock_rows = []
@@ -398,6 +472,8 @@ def save_portfolio_results_excel(results_df: pd.DataFrame, data_dir: Path) -> No
                 if stock_rows:
                     first_stock_row = min(stock_rows)
                     last_stock_row = max(stock_rows)
+                    # Total Cost Basis = SUM of individual cost basis
+                    ws[f'E{current_row}'] = f'=SUM(E{first_stock_row}:E{last_stock_row})'
                     # Total Value = SUM of individual stock total values
                     ws[f'H{current_row}'] = f'=SUM(H{first_stock_row}:H{last_stock_row})'
                     # Total P&L = SUM of individual stock P&L
@@ -406,6 +482,16 @@ def save_portfolio_results_excel(results_df: pd.DataFrame, data_dir: Path) -> No
                     ws[f'L{current_row}'] = f'=SUM(L{first_stock_row}:L{last_stock_row})'
                     # Total Equity = SUM of individual stock equity
                     ws[f'M{current_row}'] = f'=SUM(M{first_stock_row}:M{last_stock_row})'
+                
+                # Apply grey background and bold font to TOTAL rows
+                from openpyxl.styles import PatternFill, Font
+                grey_fill = PatternFill(start_color='E7E6E6', end_color='E7E6E6', fill_type='solid')
+                bold_font = Font(bold=True)
+                
+                for col_num in range(1, ws.max_column + 1):
+                    cell = ws.cell(row=current_row, column=col_num)
+                    cell.fill = grey_fill
+                    cell.font = bold_font
         
         # Save workbook (preserves formulas)
         wb.save(excel_path)
@@ -416,7 +502,9 @@ def save_portfolio_results_excel(results_df: pd.DataFrame, data_dir: Path) -> No
         # Fallback to standard method
         existing_df = read_portfolio_excel(excel_path)
         if not existing_df.empty:
-            existing_df = existing_df[existing_df['Date'] != today_iso]
+            # Convert dates for comparison
+            existing_df['Date'] = pd.to_datetime(existing_df['Date'], errors='coerce')
+            existing_df = existing_df[existing_df['Date'].dt.date != today_date]
         
         combined_df = pd.concat([existing_df, results_df], ignore_index=True) if not existing_df.empty else results_df
         write_portfolio_excel(combined_df, excel_path)
@@ -480,14 +568,17 @@ def daily_results_excel(chatgpt_portfolio: pd.DataFrame, cash: float, data_dir: 
                 current_price = float(stock_row.get('Current Price', 0)) if pd.notna(stock_row.get('Current Price')) else 0
                 cash_balance = float(stock_row.get('Cash Balance', 0)) if pd.notna(stock_row.get('Cash Balance')) else 0
                 
-                if 'SELL' in action:
-                    # For SELL: equity = cash received - cost basis (net loss/gain)
-                    cost_basis = shares * buy_price
-                    stock_equity = cash_balance - cost_basis
-                else:
-                    # For others: equity = current value + cash
-                    total_value = shares * current_price
-                    stock_equity = total_value + cash_balance
+            if 'SELL' in action:
+                # For SELL: equity = realized P&L (negative for loss)
+                # shares here represents shares sold, buy_price is original purchase price
+                cost_basis = shares * buy_price
+                cash_received = shares * current_price  # current_price is the sell price
+                realized_pnl = cash_received - cost_basis  # This will be negative for a loss
+                stock_equity = realized_pnl  # Total Equity = realized P&L
+            else:
+                # For others: equity = current value + cash
+                total_value = shares * current_price
+                stock_equity = total_value + cash_balance
                 
                 total_equity += stock_equity
             
