@@ -1,4 +1,4 @@
-"You are a professional-grade portfolio analyst. You have a portfolio (it is currently week X day Y), and this is your current portfolio: (insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt).
+"You are a professional-grade portfolio analyst. You have a portfolio, and this is your current portfolio: (insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt).
 
 
 
