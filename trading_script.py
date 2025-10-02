@@ -28,8 +28,6 @@ import pandas as pd
 import yfinance as yf
 import json
 import logging
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill
 
 # Optional pandas-datareader import for Stooq access
 try:
@@ -66,8 +64,7 @@ def _effective_now() -> datetime:
 # ------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = SCRIPT_DIR  # Save files alongside this script by default
-PORTFOLIO_EXCEL = DATA_DIR / "chatgpt_portfolio_update.xlsx"
-PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio.csv" # New variable for portfolio CSV
+PORTFOLIO_CSV = DATA_DIR / "Start Your Own" / "chatgpt_portfolio_update.csv"
 TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
 DEFAULT_BENCHMARKS = ["IWO", "XBI", "SPY", "IWM"]
 
@@ -80,8 +77,7 @@ def _log_initial_state():
     logger.info("=== Trading Script Initial Configuration ===")
     logger.info("Script directory: %s", SCRIPT_DIR)
     logger.info("Data directory: %s", DATA_DIR)
-    logger.info("Portfolio Excel: %s", PORTFOLIO_EXCEL)
-    logger.info("Portfolio CSV: %s", PORTFOLIO_CSV) # Log the new portfolio CSV path
+    logger.info("Portfolio CSV: %s", PORTFOLIO_CSV)
     logger.info("Trade log CSV: %s", TRADE_LOG_CSV)
     logger.info("Default benchmarks: %s", DEFAULT_BENCHMARKS)
     logger.info("==============================================")
@@ -412,44 +408,51 @@ def download_price_data(ticker: str, **kwargs: Any) -> FetchResult:
 # ------------------------------
 
 def set_data_dir(data_dir: Path) -> None:
-    global DATA_DIR, PORTFOLIO_EXCEL, PORTFOLIO_CSV, TRADE_LOG_CSV # Added PORTFOLIO_CSV
+    global DATA_DIR, PORTFOLIO_CSV, TRADE_LOG_CSV
     logger.info("Setting data directory: %s", data_dir)
     DATA_DIR = Path(data_dir)
     logger.debug("Creating data directory if it doesn't exist: %s", DATA_DIR)
     os.makedirs(DATA_DIR, exist_ok=True)
-    PORTFOLIO_EXCEL = DATA_DIR / "chatgpt_portfolio_update.xlsx"
-    PORTFOLIO_CSV = DATA_DIR / "chatgpt_portfolio.csv" # Kept for backward compatibility
+    PORTFOLIO_CSV = DATA_DIR / "Start Your Own" / "chatgpt_portfolio_update.csv"
     TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
-    logger.info("Data directory configured - Portfolio Excel: %s, Portfolio CSV: %s, Trade Log CSV: %s", PORTFOLIO_EXCEL, PORTFOLIO_CSV, TRADE_LOG_CSV)
+    logger.info("Data directory configured - Portfolio CSV: %s, Trade Log CSV: %s", PORTFOLIO_CSV, TRADE_LOG_CSV)
 
 
 # ------------------------------
 # Excel helper functions
 # ------------------------------
 
-def read_portfolio_from_excel() -> pd.DataFrame:
-    """Read portfolio data from Excel file."""
-    try:
-        logger.info("Reading Excel file: %s", PORTFOLIO_EXCEL)
-        df = pd.read_excel(PORTFOLIO_EXCEL, sheet_name=0)
-        logger.info("Successfully read Excel file: %s", PORTFOLIO_EXCEL)
-        return df
-    except FileNotFoundError:
-        logger.info("Excel file not found: %s. Creating empty DataFrame.", PORTFOLIO_EXCEL)
-        return pd.DataFrame()
-    except Exception as e:
-        logger.warning("Error reading Excel file %s: %s. Creating empty DataFrame.", PORTFOLIO_EXCEL, e)
-        return pd.DataFrame()
 
-def save_portfolio_to_excel(df: pd.DataFrame) -> None:
-    """Save portfolio data to Excel file."""
+def save_portfolio_to_csv_with_formatting(df: pd.DataFrame) -> None:
+    """Save portfolio data to CSV file with blank lines after TOTAL rows for better readability."""
     try:
-        logger.info("Writing Excel file: %s", PORTFOLIO_EXCEL)
-        df.to_excel(PORTFOLIO_EXCEL, index=False, sheet_name="Portfolio")
-        logger.info("Successfully wrote Excel file: %s", PORTFOLIO_EXCEL)
+        csv_path = DATA_DIR / "Start Your Own" / "chatgpt_portfolio_update.csv"
+        logger.info("Writing formatted CSV file: %s", csv_path)
+        
+        # Create formatted data with blank lines after TOTAL rows
+        formatted_rows = []
+        
+        for idx, row in df.iterrows():
+            # Add the current row
+            formatted_rows.append(row)
+            
+            # If this is a TOTAL row, add a blank line after it
+            if row['Ticker'] == 'TOTAL':
+                # Create a blank row (all NaN/empty values)
+                blank_row = pd.Series([None] * len(df.columns), index=df.columns)
+                formatted_rows.append(blank_row)
+        
+        # Create DataFrame with blank lines
+        df_formatted = pd.DataFrame(formatted_rows).reset_index(drop=True)
+        
+        # Save to CSV
+        df_formatted.to_csv(csv_path, index=False)
+        logger.info("Successfully wrote formatted CSV file: %s", csv_path)
+        
     except Exception as e:
-        logger.error("Error writing Excel file %s: %s", PORTFOLIO_EXCEL, e)
-        raise
+        logger.error("Error writing CSV file %s: %s", csv_path, e)
+        # Don't raise - this is supplementary to Excel saving
+        pass
 
 
 # ------------------------------
@@ -630,8 +633,8 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             row = {
                 "Date": today_iso, "Ticker": ticker, "Shares": shares,
                 "Buy Price": cost, "Cost Basis": cost_basis, "Stop Loss": stop,
-                "Current Price": "", "Total Value": "", "PnL": "",
-                "Action": "NO DATA", "Cash Balance": "", "Total Equity": "",
+                "Current Price": "", "Total Value": "", "PnL": "", "PnL %": "",
+                "Action": "NO DATA", "Cash Balance": "", "Total Equity": "", "Notes": "",
             }
             results.append(row)
             continue
@@ -650,11 +653,12 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             action = "SELL - Stop Loss Triggered"
             cash += value
             portfolio_df = log_sell(ticker, shares, exec_price, cost, pnl, portfolio_df)
+            pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
             row = {
                 "Date": today_iso, "Ticker": ticker, "Shares": shares,
                 "Buy Price": cost, "Cost Basis": cost_basis, "Stop Loss": stop,
-                "Current Price": exec_price, "Total Value": value, "PnL": pnl,
-                "Action": action, "Cash Balance": "", "Total Equity": "",
+                "Current Price": exec_price, "Total Value": value, "PnL": pnl, "PnL %": round(pnl_pct, 2),
+                "Action": action, "Cash Balance": "", "Total Equity": "", "Notes": "",
             }
         else:
             price = round(c, 2)
@@ -663,11 +667,12 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             action = "HOLD"
             total_value += value
             total_pnl += pnl
+            pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
             row = {
                 "Date": today_iso, "Ticker": ticker, "Shares": shares,
                 "Buy Price": cost, "Cost Basis": cost_basis, "Stop Loss": stop,
-                "Current Price": price, "Total Value": value, "PnL": pnl,
-                "Action": action, "Cash Balance": "", "Total Equity": "",
+                "Current Price": price, "Total Value": value, "PnL": pnl, "PnL %": round(pnl_pct, 2),
+                "Action": action, "Cash Balance": "", "Total Equity": "", "Notes": "",
             }
 
         results.append(row)
@@ -675,25 +680,29 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     total_row = {
         "Date": today_iso, "Ticker": "TOTAL", "Shares": "", "Buy Price": "",
         "Cost Basis": "", "Stop Loss": "", "Current Price": "",
-        "Total Value": round(total_value, 2), "PnL": round(total_pnl, 2),
+        "Total Value": round(total_value, 2), "PnL": round(total_pnl, 2), "PnL %": "",
         "Action": "", "Cash Balance": round(cash, 2),
-        "Total Equity": round(total_value + cash, 2),
+        "Total Equity": round(total_value + cash, 2), "Notes": "",
     }
     results.append(total_row)
 
     df_out = pd.DataFrame(results)
     
-    # Read existing Excel data and remove today's entries to avoid duplicates
-    existing = read_portfolio_from_excel()
-    if not existing.empty:
+    # Read existing CSV data and remove today's entries to avoid duplicates
+    if PORTFOLIO_CSV.exists():
+        logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
+        existing = pd.read_csv(PORTFOLIO_CSV)
+        logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+        # Remove blank lines for processing
+        existing = existing.dropna(how='all')
         existing = existing[existing["Date"] != str(today_iso)]
-        print("Saving results to Excel...")
+        print("Saving results to CSV...")
         df_out = pd.concat([existing, df_out], ignore_index=True)
     else:
-        print("Creating new Excel file...")
+        print("Creating new CSV file...")
     
-    # Save to Excel
-    save_portfolio_to_excel(df_out)
+    # Save to CSV with blank lines after TOTAL rows for better readability
+    save_portfolio_to_csv_with_formatting(df_out)
 
     return portfolio_df, cash
 
@@ -982,8 +991,8 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
         except Exception as e:
             raise Exception(f"Download for {ticker} failed. {e} Try checking internet connection.")
 
-    # Read portfolio history from Excel
-    chatgpt_df = read_portfolio_from_excel()
+    # Read portfolio history from CSV
+    chatgpt_df = load_full_portfolio_history()
 
     # Use only TOTAL rows, sorted by date
     totals = chatgpt_df[chatgpt_df["Ticker"] == "TOTAL"].copy()
@@ -1191,18 +1200,32 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
 # Orchestration
 # ------------------------------
 
+def load_full_portfolio_history() -> pd.DataFrame:
+    """Load the complete portfolio history from CSV file for performance analysis."""
+    if PORTFOLIO_CSV.exists():
+        logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
+        df = pd.read_csv(PORTFOLIO_CSV)
+        logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+        # Remove blank lines
+        df = df.dropna(how='all')
+        return df
+    else:
+        return pd.DataFrame()
+
 def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
-    """Load the most recent portfolio snapshot and cash balance from Excel file."""
-    df = read_portfolio_from_excel()
+    """Load the most recent portfolio snapshot and cash balance from CSV file."""
+    if PORTFOLIO_CSV.exists():
+        logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
+        df = pd.read_csv(PORTFOLIO_CSV)
+        logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+        # Remove blank lines
+        df = df.dropna(how='all')
+    else:
+        df = pd.DataFrame()
     
     if df.empty:
-        # Check if the Excel file exists but is empty or if it doesn't exist
-        if PORTFOLIO_EXCEL.exists():
-            portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
-            print("Portfolio Excel is empty. Returning set amount of cash for creating portfolio.")
-        else:
-            portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
-            print("Portfolio Excel file not found. Creating new portfolio.")
+        portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
+        print("Portfolio CSV file not found or empty. Creating new portfolio.")
         
         try:
             cash = float(input("What would you like your starting cash amount to be? "))
@@ -1256,7 +1279,36 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     # Fill missing stop_loss with 0
     latest_tickers['stop_loss'] = latest_tickers['stop_loss'].fillna(0)
     
-    latest_tickers = latest_tickers.reset_index(drop=True).to_dict(orient="records")
+    # Consolidate duplicate ticker entries by grouping and summing
+    if not latest_tickers.empty:
+        consolidated = []
+        grouped = latest_tickers.groupby('ticker')
+        
+        for ticker, group in grouped:
+            # Sum shares and cost_basis
+            total_shares = group['shares'].sum()
+            total_cost_basis = group['cost_basis'].sum()
+            
+            # Calculate weighted average buy_price from cost_basis and shares
+            if total_shares > 0:
+                avg_buy_price = total_cost_basis / total_shares
+            else:
+                avg_buy_price = 0
+            
+            # Take the maximum stop_loss (most recent/conservative)
+            max_stop_loss = group['stop_loss'].max()
+            
+            consolidated.append({
+                'ticker': ticker,
+                'shares': total_shares,
+                'cost_basis': total_cost_basis,
+                'buy_price': avg_buy_price,
+                'stop_loss': max_stop_loss
+            })
+        
+        latest_tickers = consolidated
+    else:
+        latest_tickers = latest_tickers.reset_index(drop=True).to_dict(orient="records")
 
     df_total = df[df["Ticker"] == "TOTAL"].copy()
     df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")

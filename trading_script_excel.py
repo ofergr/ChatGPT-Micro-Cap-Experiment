@@ -73,21 +73,11 @@ def load_latest_portfolio_state_excel(data_dir: Path) -> tuple[pd.DataFrame, flo
     if df.empty:
         return pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"]), 0.0
     
-    # Get today's date in string format to match what we expect
-    today_str = last_trading_date().strftime("%Y-%m-%d")
-    today_dt = pd.to_datetime(today_str)
-    
-    # Look for today's data first
-    today_entries = df[df['Date_Clean'] == today_dt]
-    
-    if not today_entries.empty:
-        print(f"📅 Found {len(today_entries)} entries for today ({today_str})")
-        latest_entries = today_entries.copy()
-    else:
-        # Fall back to most recent date
-        latest_date = df['Date_Clean'].max()
-        latest_entries = df[df['Date_Clean'] == latest_date].copy()
-        print(f"📅 Using most recent date: {latest_date.strftime('%Y-%m-%d')} ({len(latest_entries)} entries)")
+    # Always use the most recent date with actual trading data
+    # Don't assume today has data, use the latest date in the file
+    latest_date = df['Date_Clean'].max()
+    latest_entries = df[df['Date_Clean'] == latest_date].copy()
+    print(f"📅 Using most recent date: {latest_date.strftime('%Y-%m-%d')} ({len(latest_entries)} entries)")
     
     # Extract individual stock positions (exclude TOTAL)
     stocks = latest_entries[latest_entries['Ticker'] != 'TOTAL'].copy()
@@ -100,24 +90,56 @@ def load_latest_portfolio_state_excel(data_dir: Path) -> tuple[pd.DataFrame, flo
         print(f"💰 Found cash balance ${cash:.2f} from latest TOTAL row")
     
     # Convert to the format expected by the trading script
-    # For each ticker, get the LATEST row (in case of multiple rows like SELL then BUY)
+    # Properly consolidate multiple entries for the same ticker
     portfolio_data = []
     
-    # Group by ticker and get the last (most recent) row for each ticker
     if not stocks.empty:
-        # Sort by index to ensure we get the latest entry for each ticker
-        stocks_sorted = stocks.sort_index()
-        latest_per_ticker = stocks_sorted.groupby('Ticker').tail(1)
+        # Group by ticker and consolidate positions
+        consolidated_positions = {}
         
-        for _, row in latest_per_ticker.iterrows():
-            if pd.notna(row['Ticker']) and pd.notna(row['Shares']) and float(row['Shares']) > 0:
+        for _, row in stocks.iterrows():
+            ticker = row['Ticker']
+            if pd.notna(ticker) and ticker != '':
+                shares = float(row['Shares']) if pd.notna(row['Shares']) else 0.0
+                buy_price = float(row['Buy Price']) if pd.notna(row['Buy Price']) else 0.0
+                cost_basis = float(row['Cost Basis']) if pd.notna(row['Cost Basis']) else 0.0
+                stop_loss = float(row['Stop Loss']) if pd.notna(row['Stop Loss']) else 0.0
+                action = str(row['Action']).upper() if pd.notna(row['Action']) else 'HOLD'
+                
+                # Skip SELL entries - they represent closed positions
+                if 'SELL' in action:
+                    continue
+                    
+                # Only process positions with shares > 0 (include both HOLD and BUY)
+                if shares > 0:
+                    if ticker not in consolidated_positions:
+                        consolidated_positions[ticker] = {
+                            'total_shares': 0.0,
+                            'total_cost_basis': 0.0,
+                            'weighted_buy_price': 0.0,
+                            'stop_loss': stop_loss,  # Use the most recent stop loss
+                        }
+                    
+                    # Add to consolidated position
+                    consolidated_positions[ticker]['total_shares'] += shares
+                    consolidated_positions[ticker]['total_cost_basis'] += cost_basis if cost_basis > 0 else (shares * buy_price)
+                    consolidated_positions[ticker]['stop_loss'] = stop_loss  # Keep updating to latest
+        
+        # Convert consolidated positions to portfolio format
+        for ticker, position in consolidated_positions.items():
+            if position['total_shares'] > 0:
+                # Calculate weighted average buy price
+                avg_buy_price = position['total_cost_basis'] / position['total_shares'] if position['total_shares'] > 0 else 0.0
+                
                 portfolio_data.append({
-                    'ticker': row['Ticker'],
-                    'shares': float(row['Shares']),
-                    'buy_price': float(row['Buy Price']) if pd.notna(row['Buy Price']) else 0.0,
-                    'cost_basis': float(row['Cost Basis']) if pd.notna(row['Cost Basis']) else 0.0,
-                    'stop_loss': float(row['Stop Loss']) if pd.notna(row['Stop Loss']) else 0.0,
+                    'ticker': ticker,
+                    'shares': position['total_shares'],
+                    'buy_price': avg_buy_price,
+                    'cost_basis': position['total_cost_basis'],
+                    'stop_loss': position['stop_loss'],
                 })
+                
+                print(f"📈 {ticker}: {position['total_shares']:.4f} shares @ avg ${avg_buy_price:.2f} (total cost: ${position['total_cost_basis']:.2f})")
     
     portfolio_df = pd.DataFrame(portfolio_data) if portfolio_data else pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
     
@@ -442,18 +464,32 @@ def save_portfolio_results_excel(results_df: pd.DataFrame, data_dir: Path) -> No
             ws.delete_rows(row_idx)
             logger.info(f"Removed existing data for {today_date} from row {row_idx}")
         
-        # Add new data at the end and insert formulas
-        start_row = ws.max_row + 1
+        # Find the last TOTAL row and insert new data right after it
+        last_total_row = None
+        for row_idx in range(1, ws.max_row + 1):
+            if ws.cell(row=row_idx, column=2).value == "TOTAL":  # Column B is Ticker
+                last_total_row = row_idx
+        
+        # If no TOTAL row found, add at the end
+        if last_total_row is None:
+            start_row = ws.max_row + 1
+        else:
+            start_row = last_total_row + 1
+        
+        # Insert new data right after the last TOTAL row
         for row_idx, row in enumerate(dataframe_to_rows(results_df, index=False, header=False)):
             current_row = start_row + row_idx
-            ws.append(row)
+            # Insert the row at the specific position
+            ws.insert_rows(current_row)
+            for col_idx, value in enumerate(row, 1):
+                ws.cell(row=current_row, column=col_idx, value=value)
             
             # Add formulas for individual stock rows (not TOTAL rows)
             if row[1] != 'TOTAL':  # Ticker column
                 # Cost Basis = 0 for SELL, Shares * Buy Price for others
                 ws[f'E{current_row}'] = f'=IF(ISNUMBER(SEARCH("SELL",K{current_row})),0,IF(AND(C{current_row}<>"",D{current_row}<>""),C{current_row}*D{current_row},""))'
-                # Total Value = Shares * Current Price (C * G)
-                ws[f'H{current_row}'] = f'=IF(AND(C{current_row}<>"",G{current_row}<>""),C{current_row}*G{current_row},"")'
+                # Total Value = Shares * Current Price, but exclude SELL transactions (you no longer own those shares)
+                ws[f'H{current_row}'] = f'=IF(ISNUMBER(SEARCH("SELL",K{current_row})),"",IF(AND(C{current_row}<>"",G{current_row}<>""),C{current_row}*G{current_row},""))'
                 # P&L = (Current Price - Buy Price) * Shares
                 ws[f'I{current_row}'] = f'=IF(AND(C{current_row}<>"",D{current_row}<>"",G{current_row}<>""),C{current_row}*(G{current_row}-D{current_row}),"")'
                 # P&L % = (Current Price - Buy Price) / Buy Price * 100
