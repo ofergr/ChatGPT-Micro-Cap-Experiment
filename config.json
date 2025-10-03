@@ -1,0 +1,17 @@
+{
+  "initial_cash": 612.0,
+  "last_updated": "2025-10-04",
+  "settings": {
+    "default_benchmarks": [
+      "IWO",
+      "XBI",
+      "SPY",
+      "IWM"
+    ],
+    "portfolio_csv": "Start Your Own/chatgpt_portfolio_update.csv",
+    "trade_log_csv": "chatgpt_trade_log.csv"
+  },
+  "notes": {
+    "initial_cash": "Starting amount for portfolio experiment - used for S&P 500 comparison calculations"
+  }
+}
