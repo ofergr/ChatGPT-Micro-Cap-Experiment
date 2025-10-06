@@ -1245,11 +1245,11 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
     )
     spx_norm = spx_norm_fetch.df
     spx_value = np.nan
-    
+
     # Use the first Total Equity value from the series as starting equity
     # This eliminates the need to ask every time
     starting_equity = equity_series.iloc[0] if not equity_series.empty else np.nan
-    
+
     if not spx_norm.empty and not np.isnan(starting_equity):
         initial_price = float(spx_norm["Close"].iloc[0])
         price_now = float(spx_norm["Close"].iloc[-1])
@@ -1310,13 +1310,13 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
         try:
             trade_log = pd.read_csv(TRADE_LOG_CSV)
             today_trades = trade_log[trade_log["Date"] == today]
-            
+
             if not today_trades.empty:
                 print("Transaction history explaining cash flow:")
                 for _, trade in today_trades.iterrows():
                     ticker = trade["Ticker"]
                     reason = trade["Reason"]
-                    
+
                     if "BUY" in reason:
                         shares = trade["Shares Bought"] if pd.notna(trade["Shares Bought"]) else 0
                         buy_price = trade["Buy Price"] if pd.notna(trade["Buy Price"]) else 0
@@ -1329,7 +1329,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
                         pnl = trade["PnL"] if pd.notna(trade["PnL"]) else 0
                         pnl_sign = "+" if pnl >= 0 else ""
                         print(f"  📥 SELL: {ticker} | {shares:.4f} shares @ ${sell_price:.2f} = +${proceeds:.2f} (PnL: {pnl_sign}${pnl:.2f})")
-                
+
                 # Calculate net cash impact
                 total_inflow = 0
                 total_outflow = 0
@@ -1341,13 +1341,13 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
                         shares = trade["Shares Sold"] if pd.notna(trade["Shares Sold"]) else 0
                         sell_price = trade["Sell Price"] if pd.notna(trade["Sell Price"]) else 0
                         total_inflow += shares * sell_price
-                
+
                 net_cash_flow = total_inflow - total_outflow
                 flow_direction = "+" if net_cash_flow >= 0 else ""
                 print(f"  💰 NET:  Cash flow today = {flow_direction}${net_cash_flow:.2f} (${total_inflow:.2f} in, ${total_outflow:.2f} out)")
             else:
                 print("No transactions today.")
-                
+
         except Exception as e:
             print(f"Could not read trade log: {e}")
     else:
@@ -1356,8 +1356,44 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
     print("\n[ Holdings ]")
     print(chatgpt_portfolio)
 
+    # New section: Performance of each held ticker since purchase
+    print("\n[ Performance Since Purchase ]")
+    if not chatgpt_portfolio.empty and len(chatgpt_portfolio) > 0:
+        print("Ticker    Buy Price  Current Price  Total Change    % Change")
+        print("-" * 62)
+
+        s, e = trading_day_window()
+        for _, stock in chatgpt_portfolio.iterrows():
+            ticker = str(stock["ticker"]).upper()
+            shares = float(stock["shares"]) if not pd.isna(stock["shares"]) else 0.0
+            buy_price = float(stock["buy_price"]) if not pd.isna(stock["buy_price"]) else 0.0
+
+            # Only show positions with shares (skip sold positions)
+            if shares > 0:
+                # Get current price
+                fetch = download_price_data(ticker, start=s, end=e, auto_adjust=False, progress=False)
+                data = fetch.df
+
+                if not data.empty:
+                    current_price = float(data["Close"].iloc[-1])
+                    total_change = current_price - buy_price
+                    pct_change = (total_change / buy_price * 100) if buy_price > 0 else 0
+
+                    # Format the output with proper alignment
+                    change_sign = "+" if total_change >= 0 else ""
+                    pct_sign = "+" if pct_change >= 0 else ""
+
+                    print(f"{ticker:<8}  ${buy_price:>8.2f}  ${current_price:>12.2f}  {change_sign}${total_change:>9.2f}    {pct_sign}{pct_change:>6.2f}%")
+                else:
+                    print(f"{ticker:<8}  ${buy_price:>8.2f}  {'N/A':>12}  {'N/A':>10}    {'N/A':>7}")
+    else:
+        print("No current holdings to display.")
+
     print("\n[ Your Instructions ]")
     print(
+        "You are a professional-grade portfolio analyst. You have a portfolio, and above is your current portfolio: \n"
+        "(insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt above).\n"
+
         "Use this info to make decisions regarding your portfolio. You have complete control over every decision. Make any changes you believe are beneficial—no approval required.\n"
         "Deep research is not permitted. Act at your discretion to achieve the best outcome.\n"
         "If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains unchanged for tomorrow.\n"
@@ -1372,13 +1408,13 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
 
 
 # ------------------------------
-# Configuration Management 
+# Configuration Management
 # ------------------------------
 
 def load_config() -> dict:
     """Load configuration from config.json file."""
     config_path = DATA_DIR / "config.json"
-    
+
     default_config = {
         "initial_cash": 612.00,
         "last_updated": "2025-10-03",
@@ -1388,7 +1424,7 @@ def load_config() -> dict:
             "trade_log_csv": "chatgpt_trade_log.csv"
         }
     }
-    
+
     try:
         if config_path.exists():
             with open(config_path, 'r') as f:
@@ -1414,7 +1450,7 @@ def update_config_cash(new_amount: float) -> None:
     config = load_config()
     config["initial_cash"] = new_amount
     config["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d")
-    
+
     try:
         with open(config_path, 'w') as f:
             json.dump(config, f, indent=2)
@@ -1430,7 +1466,15 @@ def load_full_portfolio_history() -> pd.DataFrame:
     """Load the complete portfolio history from CSV file for performance analysis."""
     if PORTFOLIO_CSV.exists():
         logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-        df = pd.read_csv(PORTFOLIO_CSV)
+        try:
+            df = pd.read_csv(PORTFOLIO_CSV, encoding='utf-8')
+        except UnicodeDecodeError:
+            logger.warning("UTF-8 encoding failed, trying latin-1 encoding")
+            try:
+                df = pd.read_csv(PORTFOLIO_CSV, encoding='latin-1')
+            except UnicodeDecodeError:
+                logger.warning("latin-1 encoding failed, trying cp1252 encoding")
+                df = pd.read_csv(PORTFOLIO_CSV, encoding='cp1252')
         logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
         # Remove blank lines
         df = df.dropna(how='all')
@@ -1442,7 +1486,15 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     """Load the most recent portfolio snapshot and cash balance from CSV file."""
     if PORTFOLIO_CSV.exists():
         logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-        df = pd.read_csv(PORTFOLIO_CSV)
+        try:
+            df = pd.read_csv(PORTFOLIO_CSV, encoding='utf-8')
+        except UnicodeDecodeError:
+            logger.warning("UTF-8 encoding failed, trying latin-1 encoding")
+            try:
+                df = pd.read_csv(PORTFOLIO_CSV, encoding='latin-1')
+            except UnicodeDecodeError:
+                logger.warning("latin-1 encoding failed, trying cp1252 encoding")
+                df = pd.read_csv(PORTFOLIO_CSV, encoding='cp1252')
         logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
         # Remove blank lines
         df = df.dropna(how='all')
@@ -1452,13 +1504,13 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     if df.empty:
         portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
         print("Portfolio CSV file not found or empty. Creating new portfolio.")
-        
+
         # Load initial cash from config file
         config = load_config()
         cash = config["initial_cash"]
         print(f"Using initial cash amount from config: ${cash:.2f}")
         print("(Use --update-cash command line option to change this value)")
-        
+
         return portfolio, cash
 
     non_total = df[df["Ticker"] != "TOTAL"].copy()
