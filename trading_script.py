@@ -1022,9 +1022,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
     # Read existing CSV data and remove today's entries to avoid duplicates
     if PORTFOLIO_CSV.exists():
-        logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-        existing = pd.read_csv(PORTFOLIO_CSV)
-        logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+        existing = _read_csv_with_encoding_fallback(PORTFOLIO_CSV)
         # Remove blank lines for processing
         existing = existing.dropna(how='all')
         existing = existing[existing["Date"] != str(today_iso)]
@@ -1764,20 +1762,25 @@ def update_config_cash(new_amount: float) -> None:
 # Orchestration
 # ------------------------------
 
+def _read_csv_with_encoding_fallback(csv_path: Path) -> pd.DataFrame:
+    """Robust CSV reader with encoding fallback logic."""
+    logger.info("Reading CSV file: %s", csv_path)
+    try:
+        df = pd.read_csv(csv_path, encoding='utf-8')
+    except UnicodeDecodeError:
+        logger.warning("UTF-8 encoding failed, trying latin-1 encoding")
+        try:
+            df = pd.read_csv(csv_path, encoding='latin-1')
+        except UnicodeDecodeError:
+            logger.warning("latin-1 encoding failed, trying cp1252 encoding")
+            df = pd.read_csv(csv_path, encoding='cp1252')
+    logger.info("Successfully read CSV file: %s", csv_path)
+    return df
+
 def load_full_portfolio_history() -> pd.DataFrame:
     """Load the complete portfolio history from CSV file for performance analysis."""
     if PORTFOLIO_CSV.exists():
-        logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-        try:
-            df = pd.read_csv(PORTFOLIO_CSV, encoding='utf-8')
-        except UnicodeDecodeError:
-            logger.warning("UTF-8 encoding failed, trying latin-1 encoding")
-            try:
-                df = pd.read_csv(PORTFOLIO_CSV, encoding='latin-1')
-            except UnicodeDecodeError:
-                logger.warning("latin-1 encoding failed, trying cp1252 encoding")
-                df = pd.read_csv(PORTFOLIO_CSV, encoding='cp1252')
-        logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+        df = _read_csv_with_encoding_fallback(PORTFOLIO_CSV)
         # Remove blank lines
         df = df.dropna(how='all')
         return df
@@ -1787,17 +1790,7 @@ def load_full_portfolio_history() -> pd.DataFrame:
 def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
     """Load the most recent portfolio snapshot and cash balance from CSV file."""
     if PORTFOLIO_CSV.exists():
-        logger.info("Reading CSV file: %s", PORTFOLIO_CSV)
-        try:
-            df = pd.read_csv(PORTFOLIO_CSV, encoding='utf-8')
-        except UnicodeDecodeError:
-            logger.warning("UTF-8 encoding failed, trying latin-1 encoding")
-            try:
-                df = pd.read_csv(PORTFOLIO_CSV, encoding='latin-1')
-            except UnicodeDecodeError:
-                logger.warning("latin-1 encoding failed, trying cp1252 encoding")
-                df = pd.read_csv(PORTFOLIO_CSV, encoding='cp1252')
-        logger.info("Successfully read CSV file: %s", PORTFOLIO_CSV)
+        df = _read_csv_with_encoding_fallback(PORTFOLIO_CSV)
         # Remove blank lines
         df = df.dropna(how='all')
     else:
@@ -1865,6 +1858,10 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
         grouped = latest_tickers.groupby('ticker')
 
         for ticker, group in grouped:
+            # Ensure 'shares' and 'cost_basis' are numeric before summing
+            group['shares'] = pd.to_numeric(group['shares'], errors='coerce').fillna(0)
+            group['cost_basis'] = pd.to_numeric(group['cost_basis'], errors='coerce').fillna(0)
+
             # Sum shares and cost_basis with proper rounding
             total_shares = round(group['shares'].sum(), 4)  # 4 decimal places for shares
             total_cost_basis = round(group['cost_basis'].sum(), 2)  # 2 decimal places for dollars
@@ -1876,7 +1873,7 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
                 avg_buy_price = 0
 
             # Take the maximum stop_loss (most recent/conservative)
-            max_stop_loss = round(group['stop_loss'].max(), 2)  # 2 decimal places for stop loss
+            max_stop_loss = round(group['stop_loss'].astype(float).max(), 2)  # 2 decimal places for stop loss
 
             consolidated.append({
                 'ticker': ticker,
