@@ -987,9 +987,10 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             action = "SELL - Manual"  # Will be overridden if stop loss triggered
             # Show positive cash flow for sales
             cash_flow = f"+{today_sells.get(ticker_upper, 0):.2f}"
-            # Don't count in portfolio total (position sold)
-            position_value = 0
-            # PnL still tracked but not counted in running total
+            # Count remaining position value (for partial sales)
+            total_value += value
+            total_pnl += pnl
+            position_value = value  # Show remaining position value, not 0
         else:
             action = "HOLD"
             cash_flow = ""
@@ -1436,7 +1437,24 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
     totals["Date"] = pd.to_datetime(totals["Date"], format="mixed", errors="coerce")  # tolerate ISO strings
     totals = totals.sort_values("Date")
 
-    final_equity = float(totals.iloc[-1]["Total Equity"])
+    # Calculate CURRENT total equity from actual portfolio instead of using stale CSV
+    current_portfolio_value = 0.0
+    if not chatgpt_portfolio.empty:
+        s, e = trading_day_window()
+        for _, stock in chatgpt_portfolio.iterrows():
+            ticker = str(stock["ticker"]).upper()
+            shares = float(stock["shares"]) if not pd.isna(stock["shares"]) else 0.0
+            if shares > 0:
+                try:
+                    fetch = download_price_data(ticker, start=s, end=e, auto_adjust=False, progress=False)
+                    if not fetch.df.empty:
+                        current_price = float(fetch.df["Close"].iloc[-1])
+                        position_value = shares * current_price
+                        current_portfolio_value += position_value
+                except Exception:
+                    pass  # Skip if we can't get price data
+    
+    final_equity = current_portfolio_value + cash  # Use CALCULATED equity, not CSV
     equity_series = totals.set_index("Date")["Total Equity"].astype(float).sort_index()
 
     # --- Max Drawdown ---
@@ -1813,79 +1831,99 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
 
     latest_date = non_total["Date"].max()
     latest_tickers = non_total[non_total["Date"] == latest_date].copy()
-    sold_mask = latest_tickers["Action"].astype(str).str.startswith("SELL")
-    latest_tickers = latest_tickers[~sold_mask].copy()
-    latest_tickers.drop(
-        columns=[
-            "Date",
-            "Cash Balance",
-            "Total Equity",
-            "Action",
-            "Current Price",
-            "PnL",
-            "PnL %",
-            "Total Value",
-            "Notes",
-        ],
-        inplace=True,
-        errors="ignore",
-    )
-    latest_tickers.rename(
-        columns={
-            "Cost Basis": "cost_basis",
-            "Buy Price": "buy_price",
-            "Shares": "shares",
-            "Ticker": "ticker",
-            "Stop Loss": "stop_loss",
-        },
-        inplace=True,
-    )
-
-    # Fill missing cost_basis with shares * buy_price
-    for idx in latest_tickers.index:
-        if pd.isna(latest_tickers.at[idx, 'cost_basis']):
-            shares = latest_tickers.at[idx, 'shares']
-            buy_price = latest_tickers.at[idx, 'buy_price']
-            if not pd.isna(shares) and not pd.isna(buy_price):
-                latest_tickers.at[idx, 'cost_basis'] = float(shares) * float(buy_price)
-
-    # Fill missing stop_loss with 0
-    latest_tickers['stop_loss'] = latest_tickers['stop_loss'].fillna(0)
-
-    # Consolidate duplicate ticker entries by grouping and summing
-    if not latest_tickers.empty:
-        consolidated = []
-        grouped = latest_tickers.groupby('ticker')
-
-        for ticker, group in grouped:
-            # Ensure 'shares' and 'cost_basis' are numeric before summing
-            group['shares'] = pd.to_numeric(group['shares'], errors='coerce').fillna(0)
-            group['cost_basis'] = pd.to_numeric(group['cost_basis'], errors='coerce').fillna(0)
-
-            # Sum shares and cost_basis with proper rounding
-            total_shares = round(group['shares'].sum(), 4)  # 4 decimal places for shares
-            total_cost_basis = round(group['cost_basis'].sum(), 2)  # 2 decimal places for dollars
-
-            # Calculate weighted average buy_price from cost_basis and shares
-            if total_shares > 0:
-                avg_buy_price = round(total_cost_basis / total_shares, 2)  # 2 decimal places for price
-            else:
-                avg_buy_price = 0
-
-            # Take the maximum stop_loss (most recent/conservative)
-            max_stop_loss = round(group['stop_loss'].astype(float).max(), 2)  # 2 decimal places for stop loss
-
-            consolidated.append({
+    
+    # Get previous day's positions to build current portfolio from
+    previous_dates = non_total[non_total["Date"] < latest_date]["Date"].unique()
+    current_positions = {}
+    
+    if len(previous_dates) > 0:
+        # Start with previous day's portfolio
+        previous_date = max(previous_dates)
+        previous_day = non_total[non_total["Date"] == previous_date].copy()
+        previous_day = previous_day[~previous_day["Action"].astype(str).str.startswith("SELL")]
+        
+        for _, row in previous_day.iterrows():
+            ticker = str(row["Ticker"]).upper()
+            current_positions[ticker] = {
                 'ticker': ticker,
-                'shares': total_shares,
-                'cost_basis': total_cost_basis,
-                'buy_price': avg_buy_price,
-                'stop_loss': max_stop_loss
-            })
-
-        latest_tickers = consolidated
+                'shares': float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0,
+                'cost_basis': float(row["Cost Basis"]) if pd.notna(row["Cost Basis"]) else 0.0,
+                'buy_price': float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0,
+                'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
+            }
+    
+    # Apply today's BUY transactions from CSV
+    buy_transactions = latest_tickers[latest_tickers["Action"].astype(str).str.contains("BUY")]
+    for _, row in buy_transactions.iterrows():
+        ticker = str(row["Ticker"]).upper()
+        shares = float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0
+        buy_price = float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0
+        cost = shares * buy_price
+        stop_loss = float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
+        
+        if ticker not in current_positions:
+            current_positions[ticker] = {
+                'ticker': ticker,
+                'shares': shares,
+                'cost_basis': cost,
+                'buy_price': buy_price,
+                'stop_loss': stop_loss
+            }
+        else:
+            # Add to existing position
+            old_shares = current_positions[ticker]['shares']
+            old_cost = current_positions[ticker]['cost_basis']
+            new_shares = old_shares + shares
+            new_cost = old_cost + cost
+            new_avg_price = new_cost / new_shares if new_shares > 0 else 0.0
+            
+            current_positions[ticker]['shares'] = round(new_shares, 4)
+            current_positions[ticker]['cost_basis'] = round(new_cost, 2)
+            current_positions[ticker]['buy_price'] = round(new_avg_price, 2)
+            current_positions[ticker]['stop_loss'] = stop_loss
+    
+    # Apply today's SELL transactions from trade log
+    if TRADE_LOG_CSV.exists():
+        try:
+            trade_log = pd.read_csv(TRADE_LOG_CSV)
+            today_iso = latest_date.date().isoformat()
+            today_sells = trade_log[
+                (trade_log["Date"] == today_iso) &
+                (pd.notna(trade_log["Shares Sold"])) &
+                (trade_log["Shares Sold"] > 0)
+            ]
+            
+            for _, sell_row in today_sells.iterrows():
+                ticker = str(sell_row["Ticker"]).upper()
+                shares_sold = float(sell_row["Shares Sold"])
+                
+                if ticker in current_positions:
+                    current_shares = current_positions[ticker]['shares']
+                    
+                    if shares_sold >= current_shares:
+                        # Selling all shares - remove position
+                        del current_positions[ticker]
+                    else:
+                        # Partial sell - reduce position proportionally
+                        remaining_shares = current_shares - shares_sold
+                        current_cost = current_positions[ticker]['cost_basis']
+                        remaining_cost = current_cost * (remaining_shares / current_shares)
+                        
+                        current_positions[ticker]['shares'] = round(remaining_shares, 4)
+                        current_positions[ticker]['cost_basis'] = round(remaining_cost, 2)
+                        # buy_price stays the same
+        except Exception as e:
+            logger.warning("Could not process trade log for sells: %s", e)
+    
+    # Convert to list format expected by rest of function
+    latest_tickers = pd.DataFrame(list(current_positions.values()))
+    
+    # Skip the old filtering logic since we've rebuilt the portfolio correctly
+    # Convert DataFrame to list of dictionaries for return
+    if not latest_tickers.empty:
+        latest_tickers = latest_tickers.to_dict('records')
     else:
-        latest_tickers = latest_tickers.reset_index(drop=True).to_dict(orient="records")
+        latest_tickers = []
 
     df_total = df[df["Ticker"] == "TOTAL"].copy()
     df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
