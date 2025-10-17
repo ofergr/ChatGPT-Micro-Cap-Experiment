@@ -890,43 +890,8 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             break  # proceed to pricing
 
     # ------- Check trade log to identify buys/sells today -------
-    today_buys = set()  # Track tickers bought today
-    today_sells = {}    # Track tickers sold today {ticker: total_proceeds}
-    today_buy_costs = {}  # Track buy costs today {ticker: total_cost}
-
-    if TRADE_LOG_CSV.exists():
-        try:
-            trade_log = pd.read_csv(TRADE_LOG_CSV)
-
-            # Find buys today
-            today_buy_entries = trade_log[
-                (trade_log["Date"] == today_iso) &
-                (trade_log["Reason"].astype(str).str.contains("BUY", case=False, na=False))
-            ]
-            today_buys = set(today_buy_entries["Ticker"].astype(str).str.upper())
-
-            # Calculate buy costs for cash flow
-            for _, buy_entry in today_buy_entries.iterrows():
-                ticker = str(buy_entry["Ticker"]).upper()
-                cost = float(buy_entry["Cost Basis"]) if pd.notna(buy_entry["Cost Basis"]) else 0
-                today_buy_costs[ticker] = today_buy_costs.get(ticker, 0) + cost
-
-            # Find sells today and calculate proceeds
-            today_sell_entries = trade_log[
-                (trade_log["Date"] == today_iso) &
-                (pd.notna(trade_log["Shares Sold"])) &
-                (trade_log["Shares Sold"] > 0)
-            ]
-
-            for _, sell_entry in today_sell_entries.iterrows():
-                ticker = str(sell_entry["Ticker"]).upper()
-                shares_sold = float(sell_entry["Shares Sold"])
-                sell_price = float(sell_entry["Sell Price"]) if pd.notna(sell_entry["Sell Price"]) else 0
-                proceeds = shares_sold * sell_price
-                today_sells[ticker] = today_sells.get(ticker, 0) + proceeds
-
-        except Exception as e:
-            logger.warning("Could not read trade log for trade detection: %s", e)
+    today_buys, today_sells, today_buy_costs = TradeDetector.get_todays_trades(today_iso)
+    trade_log = CSVHandler.read_trade_log()  # Need this for sold position details later
 
     # ------- Daily pricing + stop-loss execution -------
     s, e = trading_day_window()
@@ -1009,6 +974,10 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
         }
 
         results.append(row)
+
+    # ------- Add completely sold positions to CSV (for today only) -------
+    current_tickers = set(portfolio_df["ticker"].astype(str).str.upper()) if not portfolio_df.empty else set()
+    SoldPositionHandler.add_sold_positions_to_results(results, today_iso, today_sells, current_tickers, trade_log)
 
     total_row = {
         "Date": today_iso, "Ticker": "TOTAL", "Shares": "", "Buy Price": "",
@@ -1780,39 +1749,142 @@ def update_config_cash(new_amount: float) -> None:
 # Orchestration
 # ------------------------------
 
-def _read_csv_with_encoding_fallback(csv_path: Path) -> pd.DataFrame:
-    """Robust CSV reader with encoding fallback logic."""
-    logger.info("Reading CSV file: %s", csv_path)
-    try:
-        df = pd.read_csv(csv_path, encoding='utf-8')
-    except UnicodeDecodeError:
-        logger.warning("UTF-8 encoding failed, trying latin-1 encoding")
+class SoldPositionHandler:
+    """Handle completely sold positions for CSV recording."""
+    
+    @staticmethod
+    def add_sold_positions_to_results(results: list[dict], today_iso: str, today_sells: dict, 
+                                     current_tickers: set, trade_log: pd.DataFrame) -> None:
+        """Add completely sold positions to CSV results."""
+        for ticker_upper, proceeds in today_sells.items():
+            if ticker_upper not in current_tickers:
+                # This ticker was completely sold (not in current portfolio)
+                sell_entries = trade_log[
+                    (trade_log["Date"] == today_iso) &
+                    (trade_log["Ticker"].astype(str).str.upper() == ticker_upper) &
+                    (pd.notna(trade_log["Shares Sold"])) &
+                    (trade_log["Shares Sold"] > 0)
+                ]
+                
+                if not sell_entries.empty:
+                    # Use the first sell entry for this ticker
+                    sell_entry = sell_entries.iloc[0]
+                    shares_sold = float(sell_entry["Shares Sold"])
+                    sell_price = float(sell_entry["Sell Price"]) if pd.notna(sell_entry["Sell Price"]) else 0
+                    cost_basis = float(sell_entry["Cost Basis"]) if pd.notna(sell_entry["Cost Basis"]) else 0
+                    pnl = float(sell_entry["PnL"]) if pd.notna(sell_entry["PnL"]) else 0
+                    
+                    # Calculate average buy price from cost basis
+                    avg_buy_price = cost_basis / shares_sold if shares_sold > 0 else 0
+                    
+                    row = {
+                        "Date": today_iso, "Ticker": ticker_upper, "Shares": 0,
+                        "Buy Price": round(avg_buy_price, 2), "Cost Basis": 0, "Stop Loss": 0,
+                        "Current Price": round(sell_price, 2), "Total Value": 0, "PnL": round(pnl, 2), "PnL %": "",
+                        "Action": "SELL - Manual", "Cash Balance": f"+{proceeds:.2f}", "Total Equity": "", "Notes": "Complete sale",
+                    }
+                    results.append(row)
+
+class TradeDetector:
+    """Detect today's trades from trade log for portfolio processing."""
+    
+    @staticmethod
+    def get_todays_trades(today_iso: str) -> tuple[set[str], dict[str, float], dict[str, float]]:
+        """Parse trade log and return today's buys/sells.
+        
+        Returns:
+            - today_buys: Set of tickers bought today  
+            - today_sells: Dict of {ticker: total_proceeds}
+            - today_buy_costs: Dict of {ticker: total_cost}
+        """
+        today_buys = set()
+        today_sells = {}
+        today_buy_costs = {}
+        
+        if not TRADE_LOG_CSV.exists():
+            return today_buys, today_sells, today_buy_costs
+            
         try:
-            df = pd.read_csv(csv_path, encoding='latin-1')
+            trade_log = pd.read_csv(TRADE_LOG_CSV)
+            
+            # Find buys today
+            today_buy_entries = trade_log[
+                (trade_log["Date"] == today_iso) &
+                (trade_log["Reason"].astype(str).str.contains("BUY", case=False, na=False))
+            ]
+            today_buys = set(today_buy_entries["Ticker"].astype(str).str.upper())
+            
+            # Calculate buy costs for cash flow
+            for _, buy_entry in today_buy_entries.iterrows():
+                ticker = str(buy_entry["Ticker"]).upper()
+                cost = float(buy_entry["Cost Basis"]) if pd.notna(buy_entry["Cost Basis"]) else 0
+                today_buy_costs[ticker] = today_buy_costs.get(ticker, 0) + cost
+            
+            # Find sells today and calculate proceeds
+            today_sell_entries = trade_log[
+                (trade_log["Date"] == today_iso) &
+                (pd.notna(trade_log["Shares Sold"])) &
+                (trade_log["Shares Sold"] > 0)
+            ]
+            
+            for _, sell_entry in today_sell_entries.iterrows():
+                ticker = str(sell_entry["Ticker"]).upper()
+                shares_sold = float(sell_entry["Shares Sold"])
+                sell_price = float(sell_entry["Sell Price"]) if pd.notna(sell_entry["Sell Price"]) else 0
+                proceeds = shares_sold * sell_price
+                today_sells[ticker] = today_sells.get(ticker, 0) + proceeds
+                
+        except Exception as e:
+            logger.warning("Could not read trade log for trade detection: %s", e)
+            
+        return today_buys, today_sells, today_buy_costs
+
+class CSVHandler:
+    """Unified CSV operations with robust encoding handling."""
+    
+    @staticmethod
+    def read_csv(csv_path: Path) -> pd.DataFrame:
+        """Robust CSV reader with encoding fallback logic."""
+        logger.info("Reading CSV file: %s", csv_path)
+        try:
+            df = pd.read_csv(csv_path, encoding='utf-8')
         except UnicodeDecodeError:
-            logger.warning("latin-1 encoding failed, trying cp1252 encoding")
-            df = pd.read_csv(csv_path, encoding='cp1252')
-    logger.info("Successfully read CSV file: %s", csv_path)
-    return df
+            logger.warning("UTF-8 encoding failed, trying latin-1 encoding")
+            try:
+                df = pd.read_csv(csv_path, encoding='latin-1')
+            except UnicodeDecodeError:
+                logger.warning("latin-1 encoding failed, trying cp1252 encoding")
+                df = pd.read_csv(csv_path, encoding='cp1252')
+        logger.info("Successfully read CSV file: %s", csv_path)
+        return df
+    
+    @staticmethod
+    def read_portfolio_csv() -> pd.DataFrame:
+        """Read portfolio CSV with proper handling."""
+        if PORTFOLIO_CSV.exists():
+            df = CSVHandler.read_csv(PORTFOLIO_CSV)
+            return df.dropna(how='all')
+        return pd.DataFrame()
+    
+    @staticmethod
+    def read_trade_log() -> pd.DataFrame:
+        """Read trade log CSV."""
+        if TRADE_LOG_CSV.exists():
+            return pd.read_csv(TRADE_LOG_CSV)
+        return pd.DataFrame()
+
+# Backward compatibility
+def _read_csv_with_encoding_fallback(csv_path: Path) -> pd.DataFrame:
+    """Legacy function for backward compatibility."""
+    return CSVHandler.read_csv(csv_path)
 
 def load_full_portfolio_history() -> pd.DataFrame:
     """Load the complete portfolio history from CSV file for performance analysis."""
-    if PORTFOLIO_CSV.exists():
-        df = _read_csv_with_encoding_fallback(PORTFOLIO_CSV)
-        # Remove blank lines
-        df = df.dropna(how='all')
-        return df
-    else:
-        return pd.DataFrame()
+    return CSVHandler.read_portfolio_csv()
 
 def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
     """Load the most recent portfolio snapshot and cash balance from CSV file."""
-    if PORTFOLIO_CSV.exists():
-        df = _read_csv_with_encoding_fallback(PORTFOLIO_CSV)
-        # Remove blank lines
-        df = df.dropna(how='all')
-    else:
-        df = pd.DataFrame()
+    df = CSVHandler.read_portfolio_csv()
 
     if df.empty:
         portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
