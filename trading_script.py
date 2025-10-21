@@ -171,12 +171,12 @@ def load_benchmarks(script_dir: Path | None = None) -> List[str]:
 
 def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
     """Return last trading date (Mon–Fri), mapping Sat/Sun -> Fri and pre-market hours to previous day.
-    
+
     If running before 9:30 AM ET on a weekday, uses the previous trading day since
     market data for the current day may not be available yet.
     """
     dt = pd.Timestamp(today or _effective_now())
-    
+
     # Handle weekends first
     if dt.weekday() == 5:  # Sat -> Fri
         friday_date = (dt - pd.Timedelta(days=1)).normalize()
@@ -186,19 +186,19 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
         friday_date = (dt - pd.Timedelta(days=2)).normalize()
         logger.info("Script running on Sunday - using Friday's data (%s) instead of today's date", friday_date.date())
         return friday_date
-    
+
     # For weekdays, check if we're before market hours or after market close
     # If it's very early or very late, market data for "today" might not be available
     try:
         import pytz
         et_tz = pytz.timezone('US/Eastern')
         dt_et = dt.tz_convert(et_tz) if dt.tz is not None else dt.tz_localize('UTC').tz_convert(et_tz)
-        
+
         # Market hours are roughly 9:30 AM to 4:00 PM ET
         # If it's before 9:30 AM ET or after hours, data may not be available for current day
         market_open = dt_et.replace(hour=9, minute=30, second=0, microsecond=0)
         market_close = dt_et.replace(hour=16, minute=0, second=0, microsecond=0)
-        
+
         # Use previous trading day if:
         # 1. Before market open, OR
         # 2. After market close (data might be delayed)
@@ -210,13 +210,13 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
             use_previous = True
         else:
             use_previous = False
-            
+
         if use_previous:
             prev_date = dt - pd.Timedelta(days=1)
             # If previous day was a weekend, go back further
             while prev_date.weekday() >= 5:  # Sat=5, Sun=6
                 prev_date = prev_date - pd.Timedelta(days=1)
-            logger.info("Script running %s - using previous trading day (%s)", 
+            logger.info("Script running %s - using previous trading day (%s)",
                        reason, prev_date.date())
             return prev_date.normalize()
     except Exception:
@@ -228,10 +228,10 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
             while prev_date.weekday() >= 5:  # Sat=5, Sun=6
                 prev_date = prev_date - pd.Timedelta(days=1)
             reason = "before 9 AM or after 9 PM local" if dt.hour < 9 else "after 9 PM local"
-            logger.info("Script running %s - using previous trading day (%s)", 
+            logger.info("Script running %s - using previous trading day (%s)",
                        reason, prev_date.date())
             return prev_date.normalize()
-    
+
     return dt.normalize()
 
 def check_weekend() -> str:
@@ -479,7 +479,7 @@ def set_data_dir(data_dir: Path) -> None:
 def save_portfolio_to_csv_with_formatting(df: pd.DataFrame) -> None:
     """Save portfolio data to CSV file with blank lines after TOTAL rows for better readability."""
     try:
-        csv_path = DATA_DIR / "Start Your Own" / "chatgpt_portfolio_update.csv"
+        csv_path = PORTFOLIO_CSV
         logger.info("Writing formatted CSV file: %s", csv_path)
 
         # Create formatted data with blank lines after TOTAL rows
@@ -514,7 +514,7 @@ def save_portfolio_to_csv_with_formatting(df: pd.DataFrame) -> None:
 
 def get_stop_loss_percentage() -> float:
     """Get stop loss percentage from user input with validation.
-    
+
     Returns:
         float: Stop loss percentage (0 means no stop loss)
     """
@@ -528,11 +528,11 @@ def get_stop_loss_percentage() -> float:
 
 def calculate_stop_loss_price(buy_price: float, stop_loss_pct: float) -> float:
     """Calculate actual stop loss price from percentage.
-    
+
     Args:
         buy_price: The buy/execution price
         stop_loss_pct: Stop loss percentage (e.g., 8 for 8%)
-    
+
     Returns:
         float: Stop loss price (0 if stop_loss_pct is 0)
     """
@@ -542,7 +542,7 @@ def calculate_stop_loss_price(buy_price: float, stop_loss_pct: float) -> float:
 
 def process_buy_order(
     order_type: str,
-    ticker: str, 
+    ticker: str,
     shares: float,
     order_price: float | None,
     stop_loss_pct: float,
@@ -550,7 +550,7 @@ def process_buy_order(
     portfolio_df: pd.DataFrame
 ) -> tuple[float, pd.DataFrame] | None:
     """Process a buy order of any type (market, limit, executed).
-    
+
     Args:
         order_type: 'm' (market), 'l' (limit), or 'e' (executed)
         ticker: Stock ticker symbol
@@ -559,12 +559,12 @@ def process_buy_order(
         stop_loss_pct: Stop loss percentage
         cash: Available cash
         portfolio_df: Current portfolio
-        
+
     Returns:
         Tuple of (updated_cash, updated_portfolio) or None if failed
     """
     today_iso = last_trading_date().date().isoformat()
-    
+
     # Determine execution price based on order type
     if order_type == "m":
         # Market order - use opening price
@@ -574,12 +574,12 @@ def process_buy_order(
         if data.empty:
             print(f"MOO buy for {ticker} failed: no market data available (source={fetch.source}).")
             return None
-        
+
         o = float(data["Open"].iloc[-1]) if "Open" in data else float(data["Close"].iloc[-1])
         exec_price = round(o, 2)
         source_info = fetch.source
         reason = "MANUAL BUY MOO - Filled"
-        
+
     elif order_type == "l":
         # Limit order - simulate execution
         s, e = trading_day_window()
@@ -588,13 +588,13 @@ def process_buy_order(
         if data.empty:
             print(f"Manual buy for {ticker} failed: no market data available (source={fetch.source}).")
             return None
-            
+
         o = float(data["Open"].iloc[-1]) if "Open" in data else float(data["Close"].iloc[-1])
         h = float(data["High"].iloc[-1])
         l = float(data["Low"].iloc[-1])
         if pd.isna(o):
             o = float(data["Close"].iloc[-1])
-            
+
         # Simulate limit order execution
         if o <= order_price:
             exec_price = o
@@ -603,40 +603,40 @@ def process_buy_order(
         else:
             print(f"Buy limit ${order_price:.2f} for {ticker} not reached today (range {l:.2f}-{h:.2f}). Order not filled.")
             return None
-            
+
         source_info = fetch.source
         reason = "MANUAL BUY LIMIT - Filled"
-        
+
     elif order_type == "e":
         # Executed order - use exact price provided
         exec_price = order_price
         source_info = "executed"
         reason = "MANUAL BUY EXECUTED - Already Filled"
-        
+
     else:
         print(f"Unknown order type: {order_type}")
         return None
-    
+
     # Calculate stop loss and cost
     stop_loss = calculate_stop_loss_price(exec_price, stop_loss_pct)
     cost_amt = exec_price * shares
-    
+
     # Check if we have enough cash
     if cost_amt > cash:
         print(f"Buy for {ticker} failed: cost {cost_amt:.2f} exceeds cash {cash:.2f}.")
         return None
-    
+
     # Show stop loss info
     if stop_loss_pct > 0:
         print(f"Stop loss set at ${stop_loss:.2f} ({stop_loss_pct}% below buy price of ${exec_price:.2f})")
-    
+
     # Confirmation
     order_desc = {
         "m": "MOO",
-        "l": "LIMIT", 
+        "l": "LIMIT",
         "e": "EXECUTED"
     }[order_type]
-    
+
     check = input(
         f"You are placing a BUY {order_desc} for {shares} {ticker} at ${exec_price:.2f}.\n"
         f"If this is a mistake, type '1' or, just hit Enter: "
@@ -644,7 +644,7 @@ def process_buy_order(
     if check == "1":
         print("Returning...")
         return cash, portfolio_df
-    
+
     # Log the trade
     log = {
         "Date": today_iso,
@@ -655,7 +655,7 @@ def process_buy_order(
         "PnL": 0.0,
         "Reason": reason,
     }
-    
+
     if os.path.exists(TRADE_LOG_CSV):
         logger.info("Reading CSV file: %s", TRADE_LOG_CSV)
         df_log = pd.read_csv(TRADE_LOG_CSV)
@@ -669,13 +669,13 @@ def process_buy_order(
     logger.info("Writing CSV file: %s", TRADE_LOG_CSV)
     df_log.to_csv(TRADE_LOG_CSV, index=False)
     logger.info("Successfully wrote CSV file: %s", TRADE_LOG_CSV)
-    
+
     # Update portfolio
     if not isinstance(portfolio_df, pd.DataFrame) or portfolio_df.empty:
         portfolio_df = pd.DataFrame(
             columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"]
         )
-    
+
     rows = portfolio_df.loc[portfolio_df["ticker"].astype(str).str.upper() == ticker.upper()]
     if rows.empty:
         # New position
@@ -702,10 +702,10 @@ def process_buy_order(
         portfolio_df.at[idx, "cost_basis"] = round(new_cost, 2)
         portfolio_df.at[idx, "buy_price"] = round(avg_price, 2)
         portfolio_df.at[idx, "stop_loss"] = round(float(stop_loss), 2)
-    
+
     # Update cash
     cash -= cost_amt
-    
+
     # Success message
     if order_type == "m":
         print(f"Manual BUY MOO for {ticker} filled at ${exec_price:.2f} ({source_info}).")
@@ -713,7 +713,7 @@ def process_buy_order(
         print(f"Manual BUY LIMIT for {ticker} filled at ${exec_price:.2f} ({source_info}).")
     else:  # executed
         print(f"Executed BUY for {ticker} logged at ${exec_price:.2f}.")
-    
+
     return cash, portfolio_df
 
 # ------------------------------
@@ -770,23 +770,23 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                     if order_type == "m":
                         stop_loss_pct = get_stop_loss_percentage()
                         order_price = None  # Will be determined from market data
-                        
+
                     elif order_type == "l":
                         order_price = float(input("Enter buy LIMIT price: "))
                         if order_price <= 0:
                             raise ValueError("Buy price must be positive")
                         stop_loss_pct = get_stop_loss_percentage()
-                        
+
                     elif order_type == "e":
                         order_price = float(input("Enter the actual execution price: "))
                         if order_price <= 0:
                             raise ValueError("Execution price must be positive")
                         stop_loss_pct = get_stop_loss_percentage()
-                        
+
                     else:
                         print("Unknown order type. Use 'm', 'l', or 'e'.")
                         continue
-                        
+
                 except ValueError as e:
                     print(f"Invalid input. {order_type.upper()} buy cancelled.")
                     continue
@@ -801,7 +801,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                     cash=cash,
                     portfolio_df=portfolio_df
                 )
-                
+
                 if result is not None:
                     cash, portfolio_df = result
                 continue
@@ -857,7 +857,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
                     # Get sell details with default to max shares
                     shares_input = input(f"Enter number of shares to sell (max {max_shares:.4f}, press Enter for all): ").strip()
-                    
+
                     if shares_input == "":
                         # Default to selling all shares
                         shares = max_shares
@@ -868,7 +868,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                         except ValueError:
                             print("Invalid number format. Sell cancelled.")
                             continue
-                    
+
                     if shares <= 0 or shares > max_shares:
                         print(f"Invalid share amount. Must be between 0 and {max_shares:.4f}. Sell cancelled.")
                         continue
@@ -1351,6 +1351,23 @@ If this is a mistake, enter 1, or hit Enter."""
 # Reporting / Metrics
 # ------------------------------
 
+def print_instructions() -> None:
+    """Print the LLM instructions section."""
+    print("\n[ Your Instructions ]")
+    print(
+        "You are a professional-grade portfolio analyst. You have a portfolio, and above is your current portfolio: \n"
+        "(insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt above).\n\n"
+        "Use this info to make decisions regarding your portfolio. You have complete control over every decision. Make any changes you believe are beneficial—no approval required.\n"
+        "Deep research is not permitted. Act at your discretion to achieve the best outcome.\n"
+        "If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains unchanged for tomorrow.\n"
+        "You are encouraged to use the internet to check current prices (and related up-to-date info) for potential buys.\n"
+        "My goal is Aggressive Alpha/Momentum. I will not tolerate ranging stocks like MSFT (as of Mid October 2025), which should be considered for divestment if needed.\n"
+        "I am only interested in high-volatility, explosive growth opportunities.\n"
+        "Market size of the stocks you inspect should not be less then 500M USD\n"
+        "\n"
+        "*Paste everything above into ChatGPT*"
+    )
+
 def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
     """Print daily price updates and performance metrics (incl. CAPM)."""
     portfolio_dict: list[dict[Any, Any]] = chatgpt_portfolio.to_dict(orient="records")
@@ -1422,7 +1439,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
                         current_portfolio_value += position_value
                 except Exception:
                     pass  # Skip if we can't get price data
-    
+
     final_equity = current_portfolio_value + cash  # Use CALCULATED equity, not CSV
     equity_series = totals.set_index("Date")["Total Equity"].astype(float).sort_index()
 
@@ -1456,6 +1473,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
         else:
             mdd_date_str = str(mdd_date)
         print(f"Maximum Drawdown: {max_drawdown:.2%} (on {mdd_date_str})")
+        print_instructions()
         return
 
     # Risk-free config
@@ -1676,22 +1694,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
     else:
         print("No current holdings to display.")
 
-    print("\n[ Your Instructions ]")
-    print(
-        "You are a professional-grade portfolio analyst. You have a portfolio, and above is your current portfolio: \n"
-        "(insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt above).\n"
-
-        "Use this info to make decisions regarding your portfolio. You have complete control over every decision. Make any changes you believe are beneficial—no approval required.\n"
-        "Deep research is not permitted. Act at your discretion to achieve the best outcome.\n"
-        "If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains unchanged for tomorrow.\n"
-        "You are encouraged to use the internet to check current prices (and related up-to-date info) for potential buys.\n"
-        "My goal is Aggressive Alpha/Momentum. I will not tolerate ranging stocks like MSFT (as of Mid October 2025), which should be considered for divestment if needed.\n"
-         "I am only interested in high-volatility, explosive growth opportunities.\n"
-        "The Energy sector should be avoided for the short term as it is not aligned with my goal. This decision should be re-evaluate at the begining of November 2025.\n"
-        "Market size of the stocks you inspect should not be less then 500M USD\n"
-        "\n"
-        "*Paste everything above into ChatGPT*"
-    )
+    print_instructions()
 
 
 # ------------------------------
@@ -1751,9 +1754,9 @@ def update_config_cash(new_amount: float) -> None:
 
 class SoldPositionHandler:
     """Handle completely sold positions for CSV recording."""
-    
+
     @staticmethod
-    def add_sold_positions_to_results(results: list[dict], today_iso: str, today_sells: dict, 
+    def add_sold_positions_to_results(results: list[dict], today_iso: str, today_sells: dict,
                                      current_tickers: set, trade_log: pd.DataFrame) -> None:
         """Add completely sold positions to CSV results."""
         for ticker_upper, proceeds in today_sells.items():
@@ -1765,7 +1768,7 @@ class SoldPositionHandler:
                     (pd.notna(trade_log["Shares Sold"])) &
                     (trade_log["Shares Sold"] > 0)
                 ]
-                
+
                 if not sell_entries.empty:
                     # Use the first sell entry for this ticker
                     sell_entry = sell_entries.iloc[0]
@@ -1773,10 +1776,10 @@ class SoldPositionHandler:
                     sell_price = float(sell_entry["Sell Price"]) if pd.notna(sell_entry["Sell Price"]) else 0
                     cost_basis = float(sell_entry["Cost Basis"]) if pd.notna(sell_entry["Cost Basis"]) else 0
                     pnl = float(sell_entry["PnL"]) if pd.notna(sell_entry["PnL"]) else 0
-                    
+
                     # Calculate average buy price from cost basis
                     avg_buy_price = cost_basis / shares_sold if shares_sold > 0 else 0
-                    
+
                     row = {
                         "Date": today_iso, "Ticker": ticker_upper, "Shares": 0,
                         "Buy Price": round(avg_buy_price, 2), "Cost Basis": 0, "Stop Loss": 0,
@@ -1787,61 +1790,61 @@ class SoldPositionHandler:
 
 class TradeDetector:
     """Detect today's trades from trade log for portfolio processing."""
-    
+
     @staticmethod
     def get_todays_trades(today_iso: str) -> tuple[set[str], dict[str, float], dict[str, float]]:
         """Parse trade log and return today's buys/sells.
-        
+
         Returns:
-            - today_buys: Set of tickers bought today  
+            - today_buys: Set of tickers bought today
             - today_sells: Dict of {ticker: total_proceeds}
             - today_buy_costs: Dict of {ticker: total_cost}
         """
         today_buys = set()
         today_sells = {}
         today_buy_costs = {}
-        
+
         if not TRADE_LOG_CSV.exists():
             return today_buys, today_sells, today_buy_costs
-            
+
         try:
             trade_log = pd.read_csv(TRADE_LOG_CSV)
-            
+
             # Find buys today
             today_buy_entries = trade_log[
                 (trade_log["Date"] == today_iso) &
                 (trade_log["Reason"].astype(str).str.contains("BUY", case=False, na=False))
             ]
             today_buys = set(today_buy_entries["Ticker"].astype(str).str.upper())
-            
+
             # Calculate buy costs for cash flow
             for _, buy_entry in today_buy_entries.iterrows():
                 ticker = str(buy_entry["Ticker"]).upper()
                 cost = float(buy_entry["Cost Basis"]) if pd.notna(buy_entry["Cost Basis"]) else 0
                 today_buy_costs[ticker] = today_buy_costs.get(ticker, 0) + cost
-            
+
             # Find sells today and calculate proceeds
             today_sell_entries = trade_log[
                 (trade_log["Date"] == today_iso) &
                 (pd.notna(trade_log["Shares Sold"])) &
                 (trade_log["Shares Sold"] > 0)
             ]
-            
+
             for _, sell_entry in today_sell_entries.iterrows():
                 ticker = str(sell_entry["Ticker"]).upper()
                 shares_sold = float(sell_entry["Shares Sold"])
                 sell_price = float(sell_entry["Sell Price"]) if pd.notna(sell_entry["Sell Price"]) else 0
                 proceeds = shares_sold * sell_price
                 today_sells[ticker] = today_sells.get(ticker, 0) + proceeds
-                
+
         except Exception as e:
             logger.warning("Could not read trade log for trade detection: %s", e)
-            
+
         return today_buys, today_sells, today_buy_costs
 
 class CSVHandler:
     """Unified CSV operations with robust encoding handling."""
-    
+
     @staticmethod
     def read_csv(csv_path: Path) -> pd.DataFrame:
         """Robust CSV reader with encoding fallback logic."""
@@ -1857,7 +1860,7 @@ class CSVHandler:
                 df = pd.read_csv(csv_path, encoding='cp1252')
         logger.info("Successfully read CSV file: %s", csv_path)
         return df
-    
+
     @staticmethod
     def read_portfolio_csv() -> pd.DataFrame:
         """Read portfolio CSV with proper handling."""
@@ -1865,7 +1868,7 @@ class CSVHandler:
             df = CSVHandler.read_csv(PORTFOLIO_CSV)
             return df.dropna(how='all')
         return pd.DataFrame()
-    
+
     @staticmethod
     def read_trade_log() -> pd.DataFrame:
         """Read trade log CSV."""
@@ -1903,17 +1906,17 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
 
     latest_date = non_total["Date"].max()
     latest_tickers = non_total[non_total["Date"] == latest_date].copy()
-    
+
     # Get previous day's positions to build current portfolio from
-    previous_dates = non_total[non_total["Date"] < latest_date]["Date"].unique()
+    # Use latest_date positions as starting point if it's before today
+    today = pd.Timestamp(pd.Timestamp.now().date())
     current_positions = {}
-    
-    if len(previous_dates) > 0:
-        # Start with previous day's portfolio
-        previous_date = max(previous_dates)
-        previous_day = non_total[non_total["Date"] == previous_date].copy()
+
+    if latest_date < today:
+        # Latest CSV data is from a previous day - use it as starting portfolio
+        previous_day = latest_tickers.copy()
         previous_day = previous_day[~previous_day["Action"].astype(str).str.startswith("SELL")]
-        
+
         for _, row in previous_day.iterrows():
             ticker = str(row["Ticker"]).upper()
             current_positions[ticker] = {
@@ -1923,7 +1926,26 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
                 'buy_price': float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0,
                 'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
             }
-    
+    else:
+        # Latest date is today - check if there are previous dates to build from
+        previous_dates = non_total[non_total["Date"] < latest_date]["Date"].unique()
+
+        if len(previous_dates) > 0:
+            # Start with previous day's portfolio
+            previous_date = max(previous_dates)
+            previous_day = non_total[non_total["Date"] == previous_date].copy()
+            previous_day = previous_day[~previous_day["Action"].astype(str).str.startswith("SELL")]
+
+            for _, row in previous_day.iterrows():
+                ticker = str(row["Ticker"]).upper()
+                current_positions[ticker] = {
+                    'ticker': ticker,
+                    'shares': float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0,
+                    'cost_basis': float(row["Cost Basis"]) if pd.notna(row["Cost Basis"]) else 0.0,
+                    'buy_price': float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0,
+                    'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
+                }
+
     # Apply today's BUY transactions from CSV
     buy_transactions = latest_tickers[latest_tickers["Action"].astype(str).str.contains("BUY")]
     for _, row in buy_transactions.iterrows():
@@ -1932,7 +1954,7 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
         buy_price = float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0
         cost = shares * buy_price
         stop_loss = float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
-        
+
         if ticker not in current_positions:
             current_positions[ticker] = {
                 'ticker': ticker,
@@ -1948,12 +1970,12 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
             new_shares = old_shares + shares
             new_cost = old_cost + cost
             new_avg_price = new_cost / new_shares if new_shares > 0 else 0.0
-            
+
             current_positions[ticker]['shares'] = round(new_shares, 4)
             current_positions[ticker]['cost_basis'] = round(new_cost, 2)
             current_positions[ticker]['buy_price'] = round(new_avg_price, 2)
             current_positions[ticker]['stop_loss'] = stop_loss
-    
+
     # Apply today's SELL transactions from trade log
     if TRADE_LOG_CSV.exists():
         try:
@@ -1964,14 +1986,14 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
                 (pd.notna(trade_log["Shares Sold"])) &
                 (trade_log["Shares Sold"] > 0)
             ]
-            
+
             for _, sell_row in today_sells.iterrows():
                 ticker = str(sell_row["Ticker"]).upper()
                 shares_sold = float(sell_row["Shares Sold"])
-                
+
                 if ticker in current_positions:
                     current_shares = current_positions[ticker]['shares']
-                    
+
                     if shares_sold >= current_shares:
                         # Selling all shares - remove position
                         del current_positions[ticker]
@@ -1980,16 +2002,16 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
                         remaining_shares = current_shares - shares_sold
                         current_cost = current_positions[ticker]['cost_basis']
                         remaining_cost = current_cost * (remaining_shares / current_shares)
-                        
+
                         current_positions[ticker]['shares'] = round(remaining_shares, 4)
                         current_positions[ticker]['cost_basis'] = round(remaining_cost, 2)
                         # buy_price stays the same
         except Exception as e:
             logger.warning("Could not process trade log for sells: %s", e)
-    
+
     # Convert to list format expected by rest of function
     latest_tickers = pd.DataFrame(list(current_positions.values()))
-    
+
     # Skip the old filtering logic since we've rebuilt the portfolio correctly
     # Convert DataFrame to list of dictionaries for return
     if not latest_tickers.empty:
