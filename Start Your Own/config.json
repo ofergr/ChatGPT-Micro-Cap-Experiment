@@ -1,0 +1,15 @@
+{
+  "initial_cash": 612.0,
+  "last_updated": "2025-10-03",
+  "settings": {
+    "default_benchmarks": [
+      "IWO",
+      "XBI",
+      "SPY",
+      "IWM"
+    ],
+    "portfolio_csv": "Start Your Own/chatgpt_portfolio_update.csv",
+    "trade_log_csv": "chatgpt_trade_log.csv",
+    "default_stop_loss_pct": 8
+  }
+}
