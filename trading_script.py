@@ -2026,13 +2026,19 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     # - If the CSV already has SELL action rows for latest_date, skip this (CSV already reflects it)
     # - This happens when daily_results() has already written the two-row format for partial sells
     # - Check in the original non_total dataframe for the latest_date
+    # - IMPORTANT: Only apply for latest_date if it's actually TODAY. If latest_date is from a
+    #   previous day, the HOLD rows already reflect the reduced share counts from any sells that day.
 
     # Check if CSV already has SELL rows for the latest_date (indicating it's been processed by daily_results)
     latest_date_entries = non_total[non_total["Date"] == latest_date]
     sell_actions = latest_date_entries[latest_date_entries["Action"].astype(str).str.contains("SELL", na=False)]
     csv_has_sell_rows = not sell_actions.empty
 
-    if TRADE_LOG_CSV.exists() and not csv_has_sell_rows:
+    # Only apply trade log sells if:
+    # 1. No SELL rows exist in CSV for this date AND
+    # 2. latest_date is TODAY (meaning we're adding today's data for the first time)
+    # If latest_date < today, the sells are already reflected in the HOLD row share counts
+    if TRADE_LOG_CSV.exists() and not csv_has_sell_rows and latest_date >= today:
         try:
             trade_log = pd.read_csv(TRADE_LOG_CSV)
             today_iso = latest_date.date().isoformat()
