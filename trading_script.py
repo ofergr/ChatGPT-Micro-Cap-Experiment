@@ -66,7 +66,7 @@ def _effective_now() -> datetime.datetime:
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = SCRIPT_DIR  # Save files alongside this script by default
 PORTFOLIO_CSV = DATA_DIR / "Start Your Own" / "chatgpt_portfolio_update.csv"
-TRADE_LOG_CSV = DATA_DIR / "chatgpt_trade_log.csv"
+TRADE_LOG_CSV = DATA_DIR / "Start Your Own" / "chatgpt_trade_log.csv"
 DEFAULT_BENCHMARKS = ["IWO", "XBI", "SPY", "IWM"]
 
 # Set up logger for this module
@@ -174,39 +174,54 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
 
     If running before 9:30 AM ET on a weekday, uses the previous trading day since
     market data for the current day may not be available yet.
+
+    IMPORTANT: Uses ET timezone to determine the date, not local timezone, to handle
+    international users correctly (e.g., Israel, Europe, Asia).
     """
-    dt = pd.Timestamp(today or _effective_now())
-
-    # Handle weekends first
-    if dt.weekday() == 5:  # Sat -> Fri
-        friday_date = (dt - pd.Timedelta(days=1)).normalize()
-        logger.info("Script running on Saturday - using Friday's data (%s) instead of today's date", friday_date.date())
-        return friday_date
-    if dt.weekday() == 6:  # Sun -> Fri
-        friday_date = (dt - pd.Timedelta(days=2)).normalize()
-        logger.info("Script running on Sunday - using Friday's data (%s) instead of today's date", friday_date.date())
-        return friday_date
-
-    # For weekdays, check if we're before market hours or after market close
-    # If it's very early or very late, market data for "today" might not be available
     try:
         import pytz
-        et_tz = pytz.timezone('US/Eastern')
-        dt_et = dt.tz_convert(et_tz) if dt.tz is not None else dt.tz_localize('UTC').tz_convert(et_tz)
+        from datetime import datetime as dt_module
 
+        et_tz = pytz.timezone('US/Eastern')
+
+        # Get current time in ET timezone (not local timezone!)
+        # This ensures that users in any timezone get consistent behavior
+        if today is not None:
+            # If explicit date provided, use it
+            dt = pd.Timestamp(today)
+        else:
+            # Get current UTC time and convert to ET to determine the date
+            current_utc = dt_module.utcnow()
+            dt_aware = pytz.utc.localize(current_utc)
+            dt_et = dt_aware.astimezone(et_tz)
+            # Use ET date, not local date!
+            dt = pd.Timestamp(dt_et)
+
+        # Handle weekends first
+        if dt.weekday() == 5:  # Sat -> Fri
+            friday_date = (dt - pd.Timedelta(days=1)).normalize()
+            logger.info("Script running on Saturday - using Friday's data (%s) instead of today's date", friday_date.date())
+            return friday_date
+        if dt.weekday() == 6:  # Sun -> Fri
+            friday_date = (dt - pd.Timedelta(days=2)).normalize()
+            logger.info("Script running on Sunday - using Friday's data (%s) instead of today's date", friday_date.date())
+            return friday_date
+
+        # For weekdays, check if we're before market hours or after market close
         # Market hours are roughly 9:30 AM to 4:00 PM ET
-        # If it's before 9:30 AM ET or after hours, data may not be available for current day
-        market_open = dt_et.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close = dt_et.replace(hour=16, minute=0, second=0, microsecond=0)
+        # Data is typically available a few hours after market close (around 6-8 PM ET)
+        # Use conservative cutoff of 6 PM ET for data availability
+        market_open_time = dt_module.strptime("09:30", "%H:%M").time()
+        data_available_time = dt_module.strptime("18:00", "%H:%M").time()  # 6 PM ET
 
         # Use previous trading day if:
-        # 1. Before market open, OR
-        # 2. After market close (data might be delayed)
-        if dt_et.time() < market_open.time():
-            reason = f"before market hours ({dt_et.strftime('%H:%M')} ET)"
+        # 1. Before market open (before 9:30 AM ET), OR
+        # 2. After market close but before data is reliably available (after 4 PM but before 6 PM ET)
+        if dt.time() < market_open_time:
+            reason = f"before market hours ({dt.strftime('%H:%M')} ET)"
             use_previous = True
-        elif dt_et.time() > market_close.time() and dt_et.hour >= 20:  # After 8 PM ET
-            reason = f"late evening ({dt_et.strftime('%H:%M')} ET)"
+        elif dt.time() < data_available_time:
+            reason = f"data not yet available ({dt.strftime('%H:%M')} ET, waiting until 6 PM ET)"
             use_previous = True
         else:
             use_previous = False
@@ -219,20 +234,24 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
             logger.info("Script running %s - using previous trading day (%s)",
                        reason, prev_date.date())
             return prev_date.normalize()
-    except Exception:
-        # If timezone handling fails, use a simple hour check
-        # Assume if it's before 9 AM or after 9 PM local time, we might need previous day data
+
+        return dt.normalize()
+
+    except Exception as e:
+        logger.warning("Timezone conversion failed: %s. Using fallback to naive datetime.", e)
+        # If timezone handling fails, fall back to naive datetime with conservative logic
+        dt = pd.Timestamp(today or _effective_now())
+        # Use previous day if before 9 AM or after 9 PM local (conservative approach)
         if dt.hour < 9 or dt.hour >= 21:
             prev_date = dt - pd.Timedelta(days=1)
             # If previous day was a weekend, go back further
             while prev_date.weekday() >= 5:  # Sat=5, Sun=6
                 prev_date = prev_date - pd.Timedelta(days=1)
-            reason = "before 9 AM or after 9 PM local" if dt.hour < 9 else "after 9 PM local"
+            reason = "before 9 AM local" if dt.hour < 9 else "after 9 PM local"
             logger.info("Script running %s - using previous trading day (%s)",
                        reason, prev_date.date())
             return prev_date.normalize()
-
-    return dt.normalize()
+        return dt.normalize()
 
 def check_weekend() -> str:
     """Backwards-compatible wrapper returning ISO date string for last trading day."""
@@ -758,6 +777,25 @@ def process_portfolio(
     today_iso = last_trading_date().date().isoformat()
     portfolio_df = _ensure_df(portfolio)
 
+    # Check if today's data already exists with actual prices (not NO DATA)
+    # If so, skip processing to make script idempotent
+    if PORTFOLIO_CSV.exists():
+        existing = CSVHandler.read_portfolio_csv()
+        if not existing.empty:
+            today_data = existing[existing["Date"] == today_iso]
+            if not today_data.empty:
+                # Check if any row has actual price data (not NO DATA)
+                has_real_data = today_data[
+                    (pd.notna(today_data["Current Price"])) &
+                    (today_data["Current Price"] != 0) &
+                    (today_data["Action"] != "NO DATA")
+                ].shape[0] > 0
+
+                if has_real_data:
+                    logger.info(f"Today's data ({today_iso}) already exists with prices. Skipping portfolio processing.")
+                    print(f"Note: Portfolio data for {today_iso} already exists. Skipping re-processing.")
+                    return portfolio_df, cash
+
     results: list[dict[str, object]] = []
     total_value = 0.0
     total_pnl = 0.0
@@ -1014,6 +1052,14 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     # ------- Add completely sold positions to CSV (for today only) -------
     current_tickers = set(portfolio_df["ticker"].astype(str).str.upper()) if not portfolio_df.empty else set()
     SoldPositionHandler.add_sold_positions_to_results(results, today_iso, today_sells, current_tickers, trade_log)
+
+    # ------- Update cash balance based on today's trades -------
+    # Add proceeds from sells
+    for ticker, proceeds in today_sells.items():
+        cash += proceeds
+    # Subtract costs from buys
+    for ticker, cost in today_buy_costs.items():
+        cash -= cost
 
     total_row = {
         "Date": today_iso, "Ticker": "TOTAL", "Shares": "", "Buy Price": "",
@@ -1692,7 +1738,11 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
         print("Ticker    Buy Price  Current Price  Total Change    % Change")
         print("-" * 62)
 
-        s, e = trading_day_window()
+        # Use a wider date range to ensure we get recent price data
+        # (today's data may not be available yet)
+        e = pd.Timestamp.now()
+        s = e - pd.Timedelta(days=5)
+
         for _, stock in chatgpt_portfolio.iterrows():
             ticker = str(stock["ticker"]).upper()
             shares = float(stock["shares"]) if not pd.isna(stock["shares"]) else 0.0
@@ -1992,7 +2042,7 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
                     'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
                 }
 
-    # Apply today's BUY transactions from CSV
+    # Apply BUY transactions from CSV (if latest_date has data)
     buy_transactions = latest_tickers[latest_tickers["Action"].astype(str).str.contains("BUY")]
     for _, row in buy_transactions.iterrows():
         ticker = str(row["Ticker"]).upper()
@@ -2022,33 +2072,87 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
             current_positions[ticker]['buy_price'] = round(new_avg_price, 2)
             current_positions[ticker]['stop_loss'] = stop_loss
 
-    # Apply today's SELL transactions from trade log ONLY when needed:
+    # Also apply BUY transactions from trade log (for dates >= latest_date, but only if not in CSV)
+    if TRADE_LOG_CSV.exists():
+        try:
+            trade_log = pd.read_csv(TRADE_LOG_CSV)
+            latest_date_iso = latest_date.date().isoformat()
+            # Include buys from latest_date onwards, excluding those already processed from CSV
+            relevant_buys = trade_log[
+                (trade_log["Date"] >= latest_date_iso) &
+                (pd.notna(trade_log["Shares Bought"])) &
+                (trade_log["Shares Bought"] > 0)
+            ]
+
+            for _, buy_row in relevant_buys.iterrows():
+                ticker = str(buy_row["Ticker"]).upper()
+                shares = float(buy_row["Shares Bought"])
+                buy_price = float(buy_row["Buy Price"]) if pd.notna(buy_row["Buy Price"]) else 0.0
+                cost = shares * buy_price
+                # Use default stop loss percentage from config (non-interactive)
+                config = load_config()
+                stop_loss_pct = config.get("settings", {}).get("default_stop_loss_pct", 8)
+                stop_loss = buy_price * (1 - stop_loss_pct / 100)
+
+                if ticker not in current_positions:
+                    current_positions[ticker] = {
+                        'ticker': ticker,
+                        'shares': shares,
+                        'cost_basis': cost,
+                        'buy_price': buy_price,
+                        'stop_loss': stop_loss
+                    }
+                else:
+                    # Add to existing position
+                    old_shares = current_positions[ticker]['shares']
+                    old_cost = current_positions[ticker]['cost_basis']
+                    new_shares = old_shares + shares
+                    new_cost = old_cost + cost
+                    new_avg_price = new_cost / new_shares if new_shares > 0 else 0.0
+
+                    current_positions[ticker]['shares'] = round(new_shares, 4)
+                    current_positions[ticker]['cost_basis'] = round(new_cost, 2)
+                    current_positions[ticker]['buy_price'] = round(new_avg_price, 2)
+                    current_positions[ticker]['stop_loss'] = stop_loss
+        except Exception as e:
+            logger.warning("Could not process trade log for buys: %s", e)
+
+    # Apply SELL transactions from trade log ONLY when needed:
     # - If the CSV already has SELL action rows for latest_date, skip this (CSV already reflects it)
     # - This happens when daily_results() has already written the two-row format for partial sells
     # - Check in the original non_total dataframe for the latest_date
-    # - IMPORTANT: Only apply for latest_date if it's actually TODAY. If latest_date is from a
-    #   previous day, the HOLD rows already reflect the reduced share counts from any sells that day.
+    # - IMPORTANT: Also apply trade log sells for dates AFTER latest_date (e.g., if CSV is from yesterday
+    #   but trade log has sells from today)
 
     # Check if CSV already has SELL rows for the latest_date (indicating it's been processed by daily_results)
     latest_date_entries = non_total[non_total["Date"] == latest_date]
     sell_actions = latest_date_entries[latest_date_entries["Action"].astype(str).str.contains("SELL", na=False)]
     csv_has_sell_rows = not sell_actions.empty
 
-    # Only apply trade log sells if:
-    # 1. No SELL rows exist in CSV for this date AND
-    # 2. latest_date is TODAY (meaning we're adding today's data for the first time)
-    # If latest_date < today, the sells are already reflected in the HOLD row share counts
-    if TRADE_LOG_CSV.exists() and not csv_has_sell_rows and latest_date >= today:
+    # If CSV has SELL rows, process them to remove sold positions from current_positions
+    if csv_has_sell_rows:
+        for _, sell_row in sell_actions.iterrows():
+            ticker = str(sell_row["Ticker"]).upper()
+            # SELL rows in CSV indicate complete sale - remove from current_positions
+            if ticker in current_positions:
+                del current_positions[ticker]
+                logger.debug(f"Removed {ticker} from portfolio based on CSV SELL row")
+
+    # Apply trade log sells if:
+    # 1. No SELL rows exist in CSV for latest_date AND
+    # 2. (latest_date is TODAY OR there are sells in trade log after latest_date)
+    elif TRADE_LOG_CSV.exists():
         try:
             trade_log = pd.read_csv(TRADE_LOG_CSV)
-            today_iso = latest_date.date().isoformat()
-            today_sells = trade_log[
-                (trade_log["Date"] == today_iso) &
+            # Check for sells from latest_date onwards (including future dates)
+            latest_date_iso = latest_date.date().isoformat()
+            relevant_sells = trade_log[
+                (trade_log["Date"] >= latest_date_iso) &
                 (pd.notna(trade_log["Shares Sold"])) &
                 (trade_log["Shares Sold"] > 0)
             ]
 
-            for _, sell_row in today_sells.iterrows():
+            for _, sell_row in relevant_sells.iterrows():
                 ticker = str(sell_row["Ticker"]).upper()
                 shares_sold = float(sell_row["Shares Sold"])
 

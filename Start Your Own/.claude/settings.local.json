@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Read(//Users/oferg/work/mycode/ChatGPT-Micro-Cap-Experiment/**)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
