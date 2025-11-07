@@ -208,20 +208,17 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
             return friday_date
 
         # For weekdays, check if we're before market hours or after market close
-        # Market hours are roughly 9:30 AM to 4:00 PM ET
-        # Data is typically available a few hours after market close (around 6-8 PM ET)
-        # Use conservative cutoff of 6 PM ET for data availability
+        # Market hours are 9:30 AM to 4:00 PM ET
+        # After market close (4:00 PM ET), use current day for logging trades
         market_open_time = dt_module.strptime("09:30", "%H:%M").time()
-        data_available_time = dt_module.strptime("18:00", "%H:%M").time()  # 6 PM ET
+        market_close_time = dt_module.strptime("16:01", "%H:%M").time()  # 4:01 PM ET
 
-        # Use previous trading day if:
-        # 1. Before market open (before 9:30 AM ET), OR
-        # 2. After market close but before data is reliably available (after 4 PM but before 6 PM ET)
+        # Use previous trading day if before market open
         if dt.time() < market_open_time:
             reason = f"before market hours ({dt.strftime('%H:%M')} ET)"
             use_previous = True
-        elif dt.time() < data_available_time:
-            reason = f"data not yet available ({dt.strftime('%H:%M')} ET, waiting until 6 PM ET)"
+        elif dt.time() < market_close_time:
+            reason = f"market still open ({dt.strftime('%H:%M')} ET, market closes at 4:00 PM ET)"
             use_previous = True
         else:
             use_previous = False
@@ -778,7 +775,7 @@ def process_portfolio(
     portfolio_df = _ensure_df(portfolio)
 
     # Check if today's data already exists with actual prices (not NO DATA)
-    # If so, skip processing to make script idempotent
+    # If so, skip processing to make script idempotent UNLESS in interactive mode
     if PORTFOLIO_CSV.exists():
         existing = CSVHandler.read_portfolio_csv()
         if not existing.empty:
@@ -792,9 +789,15 @@ def process_portfolio(
                 ].shape[0] > 0
 
                 if has_real_data:
-                    logger.info(f"Today's data ({today_iso}) already exists with prices. Skipping portfolio processing.")
-                    print(f"Note: Portfolio data for {today_iso} already exists. Skipping re-processing.")
-                    return portfolio_df, cash
+                    # In interactive mode, allow re-running to add new trades
+                    if interactive:
+                        logger.info(f"Today's data ({today_iso}) already exists, but running in interactive mode to allow new trades.")
+                        print(f"Note: Portfolio data for {today_iso} already exists. You can add new trades if needed.")
+                        # Continue to interactive trade entry
+                    else:
+                        logger.info(f"Today's data ({today_iso}) already exists with prices. Skipping portfolio processing.")
+                        print(f"Note: Portfolio data for {today_iso} already exists. Skipping re-processing.")
+                        return portfolio_df, cash
 
     results: list[dict[str, object]] = []
     total_value = 0.0
@@ -1985,14 +1988,18 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
 
     # Get previous day's positions to build current portfolio from
     # Use latest_date positions as starting point if it's before today
-    today = pd.Timestamp(pd.Timestamp.now().date())
+    # IMPORTANT: Use ET timezone to determine "today", not local timezone
+    today = pd.Timestamp(last_trading_date().date())
     current_positions = {}
 
     if latest_date < today:
         # Latest CSV data is from a previous day - use it as starting portfolio
         previous_day = latest_tickers.copy()
-        # Only load HOLD positions - BUY/SELL actions will be processed separately
-        previous_day = previous_day[previous_day["Action"].astype(str) == "HOLD"]
+        # Only load HOLD and NO DATA positions - BUY/SELL actions will be processed separately
+        previous_day = previous_day[
+            (previous_day["Action"].astype(str) == "HOLD") |
+            (previous_day["Action"].astype(str) == "NO DATA")
+        ]
 
         for _, row in previous_day.iterrows():
             ticker = str(row["Ticker"]).upper()
@@ -2004,36 +2011,17 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
                 'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
             }
     else:
-        # Latest date is today - check if there are previous dates to build from
-        previous_dates = non_total[non_total["Date"] < latest_date]["Date"].unique()
-
-        if len(previous_dates) > 0:
-            # Start with previous day's portfolio
-            previous_date = max(previous_dates)
-            previous_day = non_total[non_total["Date"] == previous_date].copy()
-            # Only load HOLD positions - BUY/SELL actions will be processed separately
-            previous_day = previous_day[previous_day["Action"].astype(str) == "HOLD"]
-
-            for _, row in previous_day.iterrows():
-                ticker = str(row["Ticker"]).upper()
-                current_positions[ticker] = {
-                    'ticker': ticker,
-                    'shares': float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0,
-                    'cost_basis': float(row["Cost Basis"]) if pd.notna(row["Cost Basis"]) else 0.0,
-                    'buy_price': float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0,
-                    'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
-                }
-
-    # If latest_date is today, also include today's HOLD positions
-    # (positions that were BUY yesterday are now HOLD today)
-    if latest_date >= today:
-        hold_positions = latest_tickers[latest_tickers["Action"].astype(str) == "HOLD"]
+        # Latest date is today - load directly from today's HOLD positions
+        # Don't load from previous day since today's data already reflects all changes
+        hold_positions = latest_tickers[
+            (latest_tickers["Action"].astype(str) == "HOLD") |
+            (latest_tickers["Action"].astype(str) == "NO DATA")
+        ]
         for _, row in hold_positions.iterrows():
             ticker = str(row["Ticker"]).upper()
             shares = float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0
 
-            # Only add if not already in current_positions (to avoid duplicates)
-            if ticker not in current_positions and shares > 0:
+            if shares > 0:
                 current_positions[ticker] = {
                     'ticker': ticker,
                     'shares': shares,
@@ -2072,14 +2060,15 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
             current_positions[ticker]['buy_price'] = round(new_avg_price, 2)
             current_positions[ticker]['stop_loss'] = stop_loss
 
-    # Also apply BUY transactions from trade log (for dates >= latest_date, but only if not in CSV)
+    # Also apply BUY transactions from trade log (for dates > latest_date only, to avoid duplicates)
+    # Skip latest_date since those are already processed from CSV above
     if TRADE_LOG_CSV.exists():
         try:
             trade_log = pd.read_csv(TRADE_LOG_CSV)
             latest_date_iso = latest_date.date().isoformat()
-            # Include buys from latest_date onwards, excluding those already processed from CSV
+            # Include buys from AFTER latest_date only (not >= to avoid duplicates)
             relevant_buys = trade_log[
-                (trade_log["Date"] >= latest_date_iso) &
+                (trade_log["Date"] > latest_date_iso) &
                 (pd.notna(trade_log["Shares Bought"])) &
                 (trade_log["Shares Bought"] > 0)
             ]
@@ -2144,10 +2133,10 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     elif TRADE_LOG_CSV.exists():
         try:
             trade_log = pd.read_csv(TRADE_LOG_CSV)
-            # Check for sells from latest_date onwards (including future dates)
+            # Check for sells from AFTER latest_date (not >= to avoid duplicates with CSV)
             latest_date_iso = latest_date.date().isoformat()
             relevant_sells = trade_log[
-                (trade_log["Date"] >= latest_date_iso) &
+                (trade_log["Date"] > latest_date_iso) &
                 (pd.notna(trade_log["Shares Sold"])) &
                 (trade_log["Shares Sold"] > 0)
             ]
