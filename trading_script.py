@@ -1859,6 +1859,7 @@ class SoldPositionHandler:
                     # Calculate average buy price from cost basis
                     avg_buy_price = cost_basis / shares_sold if shares_sold > 0 else 0
 
+                    proceeds = shares_sold * sell_price
                     row = {
                         "Date": today_iso, "Ticker": ticker_upper, "Shares": 0,
                         "Buy Price": round(avg_buy_price, 2), "Cost Basis": 0, "Stop Loss": 0,
