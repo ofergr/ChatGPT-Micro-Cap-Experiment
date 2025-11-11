@@ -1966,7 +1966,14 @@ def load_full_portfolio_history() -> pd.DataFrame:
     return CSVHandler.read_portfolio_csv()
 
 def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
-    """Load the most recent portfolio snapshot and cash balance from CSV file."""
+    """
+    Load the most recent portfolio snapshot and cash balance from CSV file.
+
+    Simplified logic:
+    - Load HOLD positions from the latest date in the CSV
+    - These represent the complete portfolio state after all trades on that date
+    - Trade log is maintained separately for audit trail and emergency reconstruction
+    """
     df = CSVHandler.read_portfolio_csv()
 
     if df.empty:
@@ -1981,199 +1988,40 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
 
         return portfolio, cash
 
+    # Get the latest date from non-TOTAL rows
     non_total = df[df["Ticker"] != "TOTAL"].copy()
     non_total["Date"] = pd.to_datetime(non_total["Date"], format="mixed", errors="coerce")
 
     latest_date = non_total["Date"].max()
     latest_tickers = non_total[non_total["Date"] == latest_date].copy()
 
-    # Get previous day's positions to build current portfolio from
-    # Use latest_date positions as starting point if it's before today
-    # IMPORTANT: Use ET timezone to determine "today", not local timezone
-    today = pd.Timestamp(last_trading_date().date())
-    current_positions = {}
+    # Load only HOLD and NO DATA positions from the latest date
+    # These represent the complete portfolio state after all that day's trades
+    hold_positions = latest_tickers[
+        (latest_tickers["Action"].astype(str) == "HOLD") |
+        (latest_tickers["Action"].astype(str) == "NO DATA")
+    ]
 
-    if latest_date < today:
-        # Latest CSV data is from a previous day - use it as starting portfolio
-        previous_day = latest_tickers.copy()
-        # Only load HOLD and NO DATA positions - BUY/SELL actions will be processed separately
-        previous_day = previous_day[
-            (previous_day["Action"].astype(str) == "HOLD") |
-            (previous_day["Action"].astype(str) == "NO DATA")
-        ]
+    current_positions = []
+    for _, row in hold_positions.iterrows():
+        ticker = str(row["Ticker"]).upper()
+        shares = float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0
 
-        for _, row in previous_day.iterrows():
-            ticker = str(row["Ticker"]).upper()
-            current_positions[ticker] = {
+        # Only include positions with shares > 0
+        if shares > 0:
+            current_positions.append({
                 'ticker': ticker,
-                'shares': float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0,
+                'shares': shares,
                 'cost_basis': float(row["Cost Basis"]) if pd.notna(row["Cost Basis"]) else 0.0,
                 'buy_price': float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0,
                 'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
-            }
-    else:
-        # Latest date is today - load directly from today's HOLD positions
-        # Don't load from previous day since today's data already reflects all changes
-        hold_positions = latest_tickers[
-            (latest_tickers["Action"].astype(str) == "HOLD") |
-            (latest_tickers["Action"].astype(str) == "NO DATA")
-        ]
-        for _, row in hold_positions.iterrows():
-            ticker = str(row["Ticker"]).upper()
-            shares = float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0
+            })
 
-            if shares > 0:
-                current_positions[ticker] = {
-                    'ticker': ticker,
-                    'shares': shares,
-                    'cost_basis': float(row["Cost Basis"]) if pd.notna(row["Cost Basis"]) else 0.0,
-                    'buy_price': float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0,
-                    'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
-                }
+    # Log what we loaded for debugging
+    latest_date_str = latest_date.date().isoformat()
+    logger.info(f"Loaded {len(current_positions)} positions from CSV date: {latest_date_str}")
 
-    # Apply BUY transactions from CSV (if latest_date has data)
-    buy_transactions = latest_tickers[latest_tickers["Action"].astype(str).str.contains("BUY")]
-    for _, row in buy_transactions.iterrows():
-        ticker = str(row["Ticker"]).upper()
-        shares = float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0
-        buy_price = float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0
-        cost = shares * buy_price
-        stop_loss = float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
-
-        if ticker not in current_positions:
-            current_positions[ticker] = {
-                'ticker': ticker,
-                'shares': shares,
-                'cost_basis': cost,
-                'buy_price': buy_price,
-                'stop_loss': stop_loss
-            }
-        else:
-            # Add to existing position
-            old_shares = current_positions[ticker]['shares']
-            old_cost = current_positions[ticker]['cost_basis']
-            new_shares = old_shares + shares
-            new_cost = old_cost + cost
-            new_avg_price = new_cost / new_shares if new_shares > 0 else 0.0
-
-            current_positions[ticker]['shares'] = round(new_shares, 4)
-            current_positions[ticker]['cost_basis'] = round(new_cost, 2)
-            current_positions[ticker]['buy_price'] = round(new_avg_price, 2)
-            current_positions[ticker]['stop_loss'] = stop_loss
-
-    # Also apply BUY transactions from trade log (for dates > latest_date only, to avoid duplicates)
-    # Skip latest_date since those are already processed from CSV above
-    if TRADE_LOG_CSV.exists():
-        try:
-            trade_log = pd.read_csv(TRADE_LOG_CSV)
-            latest_date_iso = latest_date.date().isoformat()
-            # Include buys from AFTER latest_date only (not >= to avoid duplicates)
-            relevant_buys = trade_log[
-                (trade_log["Date"] > latest_date_iso) &
-                (pd.notna(trade_log["Shares Bought"])) &
-                (trade_log["Shares Bought"] > 0)
-            ]
-
-            for _, buy_row in relevant_buys.iterrows():
-                ticker = str(buy_row["Ticker"]).upper()
-                shares = float(buy_row["Shares Bought"])
-                buy_price = float(buy_row["Buy Price"]) if pd.notna(buy_row["Buy Price"]) else 0.0
-                cost = shares * buy_price
-                # Use default stop loss percentage from config (non-interactive)
-                config = load_config()
-                stop_loss_pct = config.get("settings", {}).get("default_stop_loss_pct", 8)
-                stop_loss = buy_price * (1 - stop_loss_pct / 100)
-
-                if ticker not in current_positions:
-                    current_positions[ticker] = {
-                        'ticker': ticker,
-                        'shares': shares,
-                        'cost_basis': cost,
-                        'buy_price': buy_price,
-                        'stop_loss': stop_loss
-                    }
-                else:
-                    # Add to existing position
-                    old_shares = current_positions[ticker]['shares']
-                    old_cost = current_positions[ticker]['cost_basis']
-                    new_shares = old_shares + shares
-                    new_cost = old_cost + cost
-                    new_avg_price = new_cost / new_shares if new_shares > 0 else 0.0
-
-                    current_positions[ticker]['shares'] = round(new_shares, 4)
-                    current_positions[ticker]['cost_basis'] = round(new_cost, 2)
-                    current_positions[ticker]['buy_price'] = round(new_avg_price, 2)
-                    current_positions[ticker]['stop_loss'] = stop_loss
-        except Exception as e:
-            logger.warning("Could not process trade log for buys: %s", e)
-
-    # Apply SELL transactions from trade log ONLY when needed:
-    # - If the CSV already has SELL action rows for latest_date, skip this (CSV already reflects it)
-    # - This happens when daily_results() has already written the two-row format for partial sells
-    # - Check in the original non_total dataframe for the latest_date
-    # - IMPORTANT: Also apply trade log sells for dates AFTER latest_date (e.g., if CSV is from yesterday
-    #   but trade log has sells from today)
-
-    # Check if CSV already has SELL rows for the latest_date (indicating it's been processed by daily_results)
-    latest_date_entries = non_total[non_total["Date"] == latest_date]
-    sell_actions = latest_date_entries[latest_date_entries["Action"].astype(str).str.contains("SELL", na=False)]
-    csv_has_sell_rows = not sell_actions.empty
-
-    # If CSV has SELL rows, process them to remove sold positions from current_positions
-    if csv_has_sell_rows:
-        for _, sell_row in sell_actions.iterrows():
-            ticker = str(sell_row["Ticker"]).upper()
-            # SELL rows in CSV indicate complete sale - remove from current_positions
-            if ticker in current_positions:
-                del current_positions[ticker]
-                logger.debug(f"Removed {ticker} from portfolio based on CSV SELL row")
-
-    # Apply trade log sells if:
-    # 1. No SELL rows exist in CSV for latest_date AND
-    # 2. (latest_date is TODAY OR there are sells in trade log after latest_date)
-    elif TRADE_LOG_CSV.exists():
-        try:
-            trade_log = pd.read_csv(TRADE_LOG_CSV)
-            # Check for sells from AFTER latest_date (not >= to avoid duplicates with CSV)
-            latest_date_iso = latest_date.date().isoformat()
-            relevant_sells = trade_log[
-                (trade_log["Date"] > latest_date_iso) &
-                (pd.notna(trade_log["Shares Sold"])) &
-                (trade_log["Shares Sold"] > 0)
-            ]
-
-            for _, sell_row in relevant_sells.iterrows():
-                ticker = str(sell_row["Ticker"]).upper()
-                shares_sold = float(sell_row["Shares Sold"])
-
-                if ticker in current_positions:
-                    current_shares = current_positions[ticker]['shares']
-
-                    if shares_sold >= current_shares:
-                        # Selling all shares - remove position
-                        del current_positions[ticker]
-                    else:
-                        # Partial sell - reduce position proportionally
-                        remaining_shares = current_shares - shares_sold
-                        current_cost = current_positions[ticker]['cost_basis']
-                        remaining_cost = current_cost * (remaining_shares / current_shares)
-
-                        current_positions[ticker]['shares'] = round(remaining_shares, 4)
-                        current_positions[ticker]['cost_basis'] = round(remaining_cost, 2)
-                        # buy_price stays the same
-        except Exception as e:
-            logger.warning("Could not process trade log for sells: %s", e)
-
-    # Convert to list format expected by rest of function
-    latest_tickers = pd.DataFrame(list(current_positions.values()))
-
-    # Skip the old filtering logic since we've rebuilt the portfolio correctly
-    # Convert DataFrame to list of dictionaries for return
-    if not latest_tickers.empty:
-        latest_tickers = latest_tickers.to_dict('records')
-    else:
-        latest_tickers = []
-
+    # Load cash balance from the latest TOTAL row
     df_total = df[df["Ticker"] == "TOTAL"].copy()
     df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
 
@@ -2188,7 +2036,8 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     else:
         latest = valid_total.sort_values("Date").iloc[-1]
         cash = float(latest["Cash Balance"])
-    return latest_tickers, cash
+
+    return current_positions, cash
 
 
 def main(data_dir: Path | None = None) -> None:
