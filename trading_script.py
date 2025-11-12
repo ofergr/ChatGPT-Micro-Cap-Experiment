@@ -1995,10 +1995,11 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     latest_date = non_total["Date"].max()
     latest_tickers = non_total[non_total["Date"] == latest_date].copy()
 
-    # Load only HOLD and NO DATA positions from the latest date
+    # Load only HOLD, BUY, and NO DATA positions from the latest date
     # These represent the complete portfolio state after all that day's trades
     hold_positions = latest_tickers[
         (latest_tickers["Action"].astype(str) == "HOLD") |
+        (latest_tickers["Action"].astype(str) == "BUY") |
         (latest_tickers["Action"].astype(str) == "NO DATA")
     ]
 
