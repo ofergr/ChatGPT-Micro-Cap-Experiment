@@ -1081,6 +1081,36 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
         # Remove blank lines for processing
         existing = existing.dropna(how='all')
         existing = existing[existing["Date"] != str(today_iso)]
+
+        # Recalculate starting cash from the last TOTAL row after removing today's entries
+        # This ensures we use yesterday's cash balance even if script runs twice on same day
+        existing_total = existing[existing["Ticker"] == "TOTAL"].copy()
+        if not existing_total.empty:
+            valid_cash = existing_total[pd.notna(existing_total["Cash Balance"])]
+            if not valid_cash.empty:
+                # Get the last valid cash balance
+                last_cash = float(valid_cash.iloc[-1]["Cash Balance"])
+
+                # Recalculate today's cash based on the corrected starting balance
+                cash_correction = last_cash - (cash - sum(today_sells.values()) + sum(today_buy_costs.values()))
+                if cash_correction != 0:
+                    logger.info(f"Correcting cash balance: was using {cash:.2f}, should start from {last_cash:.2f}")
+                    cash = last_cash
+                    # Recalculate cash with today's trades
+                    for ticker, proceeds in today_sells.items():
+                        cash += proceeds
+                    for ticker, cost in today_buy_costs.items():
+                        cash -= cost
+
+                    # Update the TOTAL row with corrected cash
+                    for row in results:
+                        if row["Ticker"] == "TOTAL":
+                            row["Cash Balance"] = round(cash, 2)
+                            row["Total Equity"] = round(total_value + cash, 2)
+
+                    # Recreate df_out with corrected data
+                    df_out = pd.DataFrame(results)
+
         print("Saving results to CSV...")
         df_out = pd.concat([existing, df_out], ignore_index=True)
     else:
