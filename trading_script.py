@@ -39,6 +39,7 @@ except Exception:
 
 # -------- AS-OF override --------
 ASOF_DATE: pd.Timestamp | None = None
+OVERRIDE_CASH: float | None = None
 
 def set_asof(date: str | datetime.datetime | pd.Timestamp | None) -> None:
     """Set a global 'as of' date so the script treats that day as 'today'. Use 'YYYY-MM-DD' format."""
@@ -56,6 +57,13 @@ def set_asof(date: str | datetime.datetime | pd.Timestamp | None) -> None:
 _env_asof = os.environ.get("ASOF_DATE")
 if _env_asof:
     set_asof(_env_asof)
+
+def set_override_cash(cash: float | None) -> None:
+    """Set a global override for the cash balance."""
+    global OVERRIDE_CASH
+    OVERRIDE_CASH = cash
+    if cash is not None:
+        logger.info(f"Cash override set to: ${cash:.2f}")
 
 def _effective_now() -> datetime.datetime:
     return (ASOF_DATE.to_pydatetime() if ASOF_DATE is not None else datetime.datetime.now())
@@ -793,7 +801,7 @@ def process_portfolio(
                     if interactive:
                         logger.info(f"Today's data ({today_iso}) already exists, but running in interactive mode to allow new trades.")
                         print(f"Note: Portfolio data for {today_iso} already exists. You can add new trades if needed.")
-                        # Continue to interactive trade entry
+                        # Continue to interactive trade entry, but we'll check later if any trades were actually added
                     else:
                         logger.info(f"Today's data ({today_iso}) already exists with prices. Skipping portfolio processing.")
                         print(f"Note: Portfolio data for {today_iso} already exists. Skipping re-processing.")
@@ -802,6 +810,9 @@ def process_portfolio(
     results: list[dict[str, object]] = []
     total_value = 0.0
     total_pnl = 0.0
+
+    # Track if any manual trades were added in interactive mode
+    manual_trades_added = False
 
     # ------- Interactive trade entry (supports MOO) -------
     if interactive:
@@ -847,6 +858,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
                 if result is not None:
                     cash, portfolio_df = result
+                    manual_trades_added = True
                 continue
 
             if action == "s":
@@ -928,12 +940,34 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                 cash, portfolio_df = log_manual_sell(
                     sell_price, shares, ticker, cash, portfolio_df
                 )
+                manual_trades_added = True
                 continue
 
             break  # proceed to pricing
 
-    # ------- Check trade log to identify buys/sells today -------
-    today_buys, today_sells, today_buy_costs = TradeDetector.get_todays_trades(today_iso)
+        # If today's data exists and no manual trades were added, skip rewriting
+        if PORTFOLIO_CSV.exists():
+            existing = CSVHandler.read_portfolio_csv()
+            if not existing.empty:
+                today_data = existing[existing["Date"] == today_iso]
+                if not today_data.empty and not manual_trades_added:
+                    logger.info(f"Today's data already exists and no new trades added. Skipping rewrite.")
+                    print("No new trades added. Exiting without updating CSV.")
+                    return portfolio_df, cash
+
+    # ------- Check trade log to identify buys/sells since last portfolio date -------
+    # Get the last portfolio date to determine which trades to process
+    last_portfolio_date = None
+    if PORTFOLIO_CSV.exists():
+        existing = CSVHandler.read_portfolio_csv()
+        if not existing.empty:
+            non_total = existing[existing["Ticker"] != "TOTAL"].copy()
+            non_total["Date"] = pd.to_datetime(non_total["Date"], format="mixed", errors="coerce")
+            last_portfolio_date = non_total["Date"].max()
+            if pd.notna(last_portfolio_date):
+                last_portfolio_date = last_portfolio_date.date().isoformat()
+
+    today_buys, today_sells, today_buy_costs = TradeDetector.get_todays_trades(today_iso, last_portfolio_date)
     trade_log = CSVHandler.read_trade_log()  # Need this for sold position details later
 
     # ------- Daily pricing + stop-loss execution -------
@@ -997,17 +1031,25 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             # 2. A HOLD row showing what remains (current row)
 
             # First, add the SELL transaction row
-            # Get sell details from trade log
+            # Get sell details from trade log (search from last portfolio date to today)
+            if last_portfolio_date is None or last_portfolio_date >= today_iso:
+                # Only search today
+                date_filter = (trade_log["Date"] == today_iso)
+            else:
+                # Search the gap period
+                date_filter = ((trade_log["Date"] > last_portfolio_date) & (trade_log["Date"] <= today_iso))
+
             sell_entries = trade_log[
-                (trade_log["Date"] == today_iso) &
+                date_filter &
                 (trade_log["Ticker"].astype(str).str.upper() == ticker_upper) &
                 (pd.notna(trade_log["Shares Sold"])) &
                 (trade_log["Shares Sold"] > 0)
             ]
 
             if not sell_entries.empty:
-                sell_entry = sell_entries.iloc[0]
-                shares_sold = float(sell_entry["Shares Sold"])
+                # Aggregate all sells for this ticker in the gap period
+                total_shares_sold = sell_entries["Shares Sold"].sum()
+                sell_entry = sell_entries.iloc[0]  # Use first entry for pricing details
                 sell_price = float(sell_entry["Sell Price"]) if pd.notna(sell_entry["Sell Price"]) else price
                 sell_cost_basis = float(sell_entry["Cost Basis"]) if pd.notna(sell_entry["Cost Basis"]) else 0
                 sell_pnl = float(sell_entry["PnL"]) if pd.notna(sell_entry["PnL"]) else 0
@@ -1015,24 +1057,41 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                 # Calculate PnL % for the sold portion
                 sell_pnl_pct = (sell_pnl / sell_cost_basis * 100) if sell_cost_basis > 0 else 0
 
+                # Check if this is a complete sale (all shares sold)
+                # Add small tolerance for floating point precision
+                is_complete_sale = abs(total_shares_sold - shares) < 1e-6
+
                 # Create SELL row (showing what was sold)
                 sell_row = {
-                    "Date": today_iso, "Ticker": ticker, "Shares": round(shares_sold, 4),
+                    "Date": today_iso, "Ticker": ticker, "Shares": round(total_shares_sold, 4),
                     "Buy Price": round(cost, 2), "Cost Basis": round(sell_cost_basis, 2), "Stop Loss": round(stop, 2),
-                    "Current Price": round(sell_price, 2), "Total Value": round(shares_sold * sell_price, 2),
+                    "Current Price": round(sell_price, 2), "Total Value": round(total_shares_sold * sell_price, 2),
                     "PnL": round(sell_pnl, 2), "PnL %": round(sell_pnl_pct, 2),
                     "Action": "SELL - Manual", "Cash Balance": f"+{today_sells.get(ticker_upper, 0):.2f}",
-                    "Total Equity": "", "Notes": "Partial sell",
+                    "Total Equity": "", "Notes": "Complete sale" if is_complete_sale else "Partial sell",
                 }
                 results.append(sell_row)
 
-            # Now handle the HOLD row (remaining position)
-            action = "HOLD"
-            cash_flow = ""  # Cash flow already shown in SELL row
-            # Count remaining position value
-            total_value += value
-            total_pnl += pnl
-            position_value = value
+                # Only add HOLD row if shares remain after the sell
+                if not is_complete_sale:
+                    # Now handle the HOLD row (remaining position)
+                    action = "HOLD"
+                    cash_flow = ""  # Cash flow already shown in SELL row
+                    # Count remaining position value
+                    total_value += value
+                    total_pnl += pnl
+                    position_value = value
+
+                    # Create HOLD row for remaining shares
+                    pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
+                    row = {
+                        "Date": today_iso, "Ticker": ticker, "Shares": round(shares, 4),
+                        "Buy Price": round(cost, 2), "Cost Basis": round(cost_basis, 2), "Stop Loss": round(stop, 2),
+                        "Current Price": price, "Total Value": round(position_value, 2), "PnL": pnl, "PnL %": round(pnl_pct, 2),
+                        "Action": action, "Cash Balance": cash_flow, "Total Equity": "", "Notes": action_note,
+                    }
+                    results.append(row)
+                # else: Complete sale - no HOLD row needed, continue to next ticker
         else:
             action = "HOLD"
             cash_flow = ""
@@ -1041,20 +1100,20 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             total_pnl += pnl
             position_value = value
 
-        pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
+            pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
 
-        row = {
-            "Date": today_iso, "Ticker": ticker, "Shares": round(shares, 4),
-            "Buy Price": round(cost, 2), "Cost Basis": round(cost_basis, 2), "Stop Loss": round(stop, 2),
-            "Current Price": price, "Total Value": round(position_value, 2), "PnL": pnl, "PnL %": round(pnl_pct, 2),
-            "Action": action, "Cash Balance": cash_flow, "Total Equity": "", "Notes": action_note,
-        }
+            row = {
+                "Date": today_iso, "Ticker": ticker, "Shares": round(shares, 4),
+                "Buy Price": round(cost, 2), "Cost Basis": round(cost_basis, 2), "Stop Loss": round(stop, 2),
+                "Current Price": price, "Total Value": round(position_value, 2), "PnL": pnl, "PnL %": round(pnl_pct, 2),
+                "Action": action, "Cash Balance": cash_flow, "Total Equity": "", "Notes": action_note,
+            }
 
-        results.append(row)
+            results.append(row)
 
-    # ------- Add completely sold positions to CSV (for today only) -------
+    # ------- Add completely sold positions to CSV -------
     current_tickers = set(portfolio_df["ticker"].astype(str).str.upper()) if not portfolio_df.empty else set()
-    SoldPositionHandler.add_sold_positions_to_results(results, today_iso, today_sells, current_tickers, trade_log)
+    SoldPositionHandler.add_sold_positions_to_results(results, today_iso, today_sells, current_tickers, trade_log, last_portfolio_date)
 
     # ------- Update cash balance based on today's trades -------
     # Add proceeds from sells
@@ -1063,6 +1122,11 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     # Subtract costs from buys
     for ticker, cost in today_buy_costs.items():
         cash -= cost
+
+    # Apply cash override if set via --set-cash parameter
+    if OVERRIDE_CASH is not None:
+        logger.info(f"Overriding calculated cash ${cash:.2f} with --set-cash value: ${OVERRIDE_CASH:.2f}")
+        cash = OVERRIDE_CASH
 
     total_row = {
         "Date": today_iso, "Ticker": "TOTAL", "Shares": "", "Buy Price": "",
@@ -1119,7 +1183,11 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     # Save to CSV with blank lines after TOTAL rows for better readability
     save_portfolio_to_csv_with_formatting(df_out)
 
-    return portfolio_df, cash
+    # Reload portfolio state from CSV to get the updated positions after all trades
+    # This ensures the returned portfolio reflects any complete sales that were processed
+    updated_portfolio, updated_cash = load_latest_portfolio_state()
+
+    return updated_portfolio, updated_cash
 
 
 
@@ -1461,20 +1529,27 @@ def print_instructions() -> None:
     print(
         "You are a professional-grade portfolio analyst. You have a portfolio, and above is your current portfolio: \n"
         "(insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt above).\n\n"
-        "Use this info to make decisions regarding your portfolio. You have complete control over every decision. Make any changes you believe are beneficial—no approval required.\n"
+        "Use this info to make decisions regarding your portfolio. You have complete control over every decision. \n"
+        "Make any changes you believe are beneficial—no approval required.\n"
         "Deep research is not permitted. Act at your discretion to achieve the best outcome.\n"
-        "If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains unchanged for tomorrow.\n"
+        "If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains \n"
+        "unchanged for tomorrow.\n"
         "You are encouraged to use the internet to check current prices (and related up-to-date info) for potential buys.\n"
-        "My goal is Aggressive Alpha/Momentum. I will not tolerate ranging stocks like MSFT (as of Mid October 2025), which should be considered for divestment if needed.\n"
+        "My goal is Aggressive Alpha/Momentum. I will not tolerate ranging stocks for the period of the previous 3 months.\n"
         "I am only interested in high-volatility, explosive growth opportunities.\n"
         "Market size of the stocks you inspect should not be less then 500M USD\n"
+        "There are no additional funds available beyond the cash balance shown.\n"
         "\n"
         "*Paste everything above into ChatGPT*"
     )
 
-def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
+def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: float) -> None:
     """Print daily price updates and performance metrics (incl. CAPM)."""
-    portfolio_dict: list[dict[Any, Any]] = chatgpt_portfolio.to_dict(orient="records")
+    # Handle both DataFrame and list[dict] input
+    if isinstance(chatgpt_portfolio, pd.DataFrame):
+        portfolio_dict: list[dict[Any, Any]] = chatgpt_portfolio.to_dict(orient="records")
+    else:
+        portfolio_dict = chatgpt_portfolio
     today = check_weekend()
 
     rows: list[list[str]] = []
@@ -1529,11 +1604,11 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
 
     # Calculate CURRENT total equity from actual portfolio instead of using stale CSV
     current_portfolio_value = 0.0
-    if not chatgpt_portfolio.empty:
+    if portfolio_dict:  # Check if portfolio_dict is not empty
         s, e = trading_day_window()
-        for _, stock in chatgpt_portfolio.iterrows():
+        for stock in portfolio_dict:
             ticker = str(stock["ticker"]).upper()
-            shares = float(stock["shares"]) if not pd.isna(stock["shares"]) else 0.0
+            shares = float(stock["shares"]) if stock.get("shares") is not None else 0.0
             if shares > 0:
                 try:
                     fetch = download_price_data(ticker, start=s, end=e, auto_adjust=False, progress=False)
@@ -1767,7 +1842,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
 
     # New section: Performance of each held ticker since purchase
     print("\n[ Performance Since Purchase ]")
-    if not chatgpt_portfolio.empty and len(chatgpt_portfolio) > 0:
+    if portfolio_dict and len(portfolio_dict) > 0:
         print("Ticker    Buy Price  Current Price  Total Change    % Change")
         print("-" * 62)
 
@@ -1776,10 +1851,10 @@ def daily_results(chatgpt_portfolio: pd.DataFrame, cash: float) -> None:
         e = pd.Timestamp.now()
         s = e - pd.Timedelta(days=5)
 
-        for _, stock in chatgpt_portfolio.iterrows():
+        for stock in portfolio_dict:
             ticker = str(stock["ticker"]).upper()
-            shares = float(stock["shares"]) if not pd.isna(stock["shares"]) else 0.0
-            buy_price = float(stock["buy_price"]) if not pd.isna(stock["buy_price"]) else 0.0
+            shares = float(stock["shares"]) if stock.get("shares") is not None else 0.0
+            buy_price = float(stock["buy_price"]) if stock.get("buy_price") is not None else 0.0
 
             # Only show positions with shares (skip sold positions)
             if shares > 0:
@@ -1866,13 +1941,19 @@ class SoldPositionHandler:
 
     @staticmethod
     def add_sold_positions_to_results(results: list[dict], today_iso: str, today_sells: dict,
-                                     current_tickers: set, trade_log: pd.DataFrame) -> None:
+                                     current_tickers: set, trade_log: pd.DataFrame, last_portfolio_date: str | None = None) -> None:
         """Add completely sold positions to CSV results."""
         for ticker_upper, proceeds in today_sells.items():
             if ticker_upper not in current_tickers:
                 # This ticker was completely sold (not in current portfolio)
+                # Search the gap period if there is one
+                if last_portfolio_date is None or last_portfolio_date >= today_iso:
+                    date_filter = (trade_log["Date"] == today_iso)
+                else:
+                    date_filter = ((trade_log["Date"] > last_portfolio_date) & (trade_log["Date"] <= today_iso))
+
                 sell_entries = trade_log[
-                    (trade_log["Date"] == today_iso) &
+                    date_filter &
                     (trade_log["Ticker"].astype(str).str.upper() == ticker_upper) &
                     (pd.notna(trade_log["Shares Sold"])) &
                     (trade_log["Shares Sold"] > 0)
@@ -1902,13 +1983,17 @@ class TradeDetector:
     """Detect today's trades from trade log for portfolio processing."""
 
     @staticmethod
-    def get_todays_trades(today_iso: str) -> tuple[set[str], dict[str, float], dict[str, float]]:
-        """Parse trade log and return today's buys/sells.
+    def get_todays_trades(today_iso: str, last_portfolio_date: str | None = None) -> tuple[set[str], dict[str, float], dict[str, float]]:
+        """Parse trade log and return trades since last portfolio date (or just today if caught up).
+
+        Args:
+            today_iso: Today's date in ISO format
+            last_portfolio_date: Last date in portfolio CSV (None if portfolio is empty)
 
         Returns:
-            - today_buys: Set of tickers bought today
-            - today_sells: Dict of {ticker: total_proceeds}
-            - today_buy_costs: Dict of {ticker: total_cost}
+            - today_buys: Set of tickers bought since last portfolio date
+            - today_sells: Dict of {ticker: total_proceeds} since last portfolio date
+            - today_buy_costs: Dict of {ticker: total_cost} since last portfolio date
         """
         today_buys = set()
         today_sells = {}
@@ -1920,10 +2005,26 @@ class TradeDetector:
         try:
             trade_log = pd.read_csv(TRADE_LOG_CSV)
 
-            # Find buys today
-            today_buy_entries = trade_log[
-                (trade_log["Date"] == today_iso) &
-                (trade_log["Reason"].astype(str).str.contains("BUY", case=False, na=False))
+            # Determine which trades to process
+            if last_portfolio_date is None:
+                # Portfolio is empty, process all trades up to today
+                trades_to_process = trade_log[trade_log["Date"] <= today_iso]
+                logger.info(f"Portfolio is empty. Processing all trades up to {today_iso}")
+            elif last_portfolio_date < today_iso:
+                # There's a gap - process all trades after last portfolio date up to today
+                trades_to_process = trade_log[
+                    (trade_log["Date"] > last_portfolio_date) &
+                    (trade_log["Date"] <= today_iso)
+                ]
+                logger.info(f"Processing trades from {last_portfolio_date} to {today_iso} (gap detected)")
+            else:
+                # Portfolio is current or today's data already exists - only process today
+                trades_to_process = trade_log[trade_log["Date"] == today_iso]
+                logger.info(f"Processing trades for {today_iso} only")
+
+            # Find buys in the date range
+            today_buy_entries = trades_to_process[
+                (trades_to_process["Reason"].astype(str).str.contains("BUY", case=False, na=False))
             ]
             today_buys = set(today_buy_entries["Ticker"].astype(str).str.upper())
 
@@ -1933,11 +2034,10 @@ class TradeDetector:
                 cost = float(buy_entry["Cost Basis"]) if pd.notna(buy_entry["Cost Basis"]) else 0
                 today_buy_costs[ticker] = today_buy_costs.get(ticker, 0) + cost
 
-            # Find sells today and calculate proceeds
-            today_sell_entries = trade_log[
-                (trade_log["Date"] == today_iso) &
-                (pd.notna(trade_log["Shares Sold"])) &
-                (trade_log["Shares Sold"] > 0)
+            # Find sells in the date range and calculate proceeds
+            today_sell_entries = trades_to_process[
+                (pd.notna(trades_to_process["Shares Sold"])) &
+                (trades_to_process["Shares Sold"] > 0)
             ]
 
             for _, sell_entry in today_sell_entries.iterrows():
@@ -2092,6 +2192,8 @@ if __name__ == "__main__":
                        help="Set the logging level (default: INFO)")
     parser.add_argument("--update-cash", type=float, default=None,
                        help="Update the initial cash amount in config file (e.g., --update-cash 612.00)")
+    parser.add_argument("--set-cash", type=float, default=None,
+                       help="Override the calculated cash balance with a specific amount (e.g., --set-cash 273.00)")
     args = parser.parse_args()
 
 
@@ -2114,5 +2216,8 @@ if __name__ == "__main__":
 
     if args.asof:
         set_asof(args.asof)
+
+    if args.set_cash is not None:
+        set_override_cash(args.set_cash)
 
     main(Path(args.data_dir) if args.data_dir else None)
