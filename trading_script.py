@@ -1848,7 +1848,12 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
         print("No trade log found.")
 
     print("\n[ Holdings ]")
-    print(chatgpt_portfolio)
+    # Ensure we print as a DataFrame for proper formatting
+    if isinstance(chatgpt_portfolio, list):
+        holdings_df = pd.DataFrame(chatgpt_portfolio)
+    else:
+        holdings_df = chatgpt_portfolio
+    print(holdings_df)
 
     # New section: Performance of each held ticker since purchase
     print("\n[ Performance Since Purchase ]")
