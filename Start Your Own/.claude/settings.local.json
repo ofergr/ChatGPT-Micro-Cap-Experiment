@@ -5,7 +5,8 @@
       "Bash(python3:*)",
       "Bash(git log:*)",
       "Bash(cat:*)",
-      "Bash(chatgpt_portfolio_update.csv)"
+      "Bash(chatgpt_portfolio_update.csv)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

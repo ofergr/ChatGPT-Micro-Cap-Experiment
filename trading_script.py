@@ -945,18 +945,28 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
             break  # proceed to pricing
 
-        # If today's data exists and no manual trades were added, skip rewriting
+    # ------- SIMPLIFIED: Early exit if snapshot already complete -------
+    # Since we now load from trade log (single source of truth), we only need to check
+    # if today's snapshot exists with prices. No complex reconciliation needed!
+    if interactive and not manual_trades_added:
         if PORTFOLIO_CSV.exists():
             existing = CSVHandler.read_portfolio_csv()
             if not existing.empty:
                 today_data = existing[existing["Date"] == today_iso]
-                if not today_data.empty and not manual_trades_added:
-                    logger.info(f"Today's data already exists and no new trades added. Skipping rewrite.")
-                    print("No new trades added. Exiting without updating CSV.")
-                    return portfolio_df, cash
+                if not today_data.empty:
+                    # Check if snapshot has actual price data (meaning it's complete)
+                    has_real_data = today_data[
+                        (pd.notna(today_data["Current Price"])) &
+                        (today_data["Current Price"] != 0) &
+                        (today_data["Action"] != "NO DATA")
+                    ].shape[0] > 0
 
-    # ------- Check trade log to identify buys/sells since last portfolio date -------
-    # Get the last portfolio date to determine which trades to process
+                    if has_real_data:
+                        logger.info(f"Today's snapshot already exists with prices and no new trades. Skipping rewrite.")
+                        print("No new trades added. Exiting without updating CSV.")
+                        return portfolio_df, cash
+
+    # Get the last portfolio date to determine which trades to process for display
     last_portfolio_date = None
     if PORTFOLIO_CSV.exists():
         existing = CSVHandler.read_portfolio_csv()
@@ -2095,79 +2105,157 @@ def load_full_portfolio_history() -> pd.DataFrame:
     """Load the complete portfolio history from CSV file for performance analysis."""
     return CSVHandler.read_portfolio_csv()
 
-def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
+def rebuild_portfolio_from_trades() -> tuple[dict[str, dict[str, float]], float]:
     """
-    Load the most recent portfolio snapshot and cash balance from CSV file.
+    Rebuild complete portfolio state from trade log (single source of truth).
 
-    Simplified logic:
-    - Load HOLD positions from the latest date in the CSV
-    - These represent the complete portfolio state after all trades on that date
-    - Trade log is maintained separately for audit trail and emergency reconstruction
+    HYBRID APPROACH:
+    - Use last snapshot's cash balance as checkpoint (we don't know original starting cash)
+    - Replay ALL trades from log to get current positions (authoritative)
+    - Only adjust cash for trades AFTER the last snapshot date
+
+    Returns:
+        - portfolio: Dict of {ticker: {shares, buy_price, cost_basis, stop_loss}}
+        - cash: Current cash balance
     """
-    df = CSVHandler.read_portfolio_csv()
+    trade_log = CSVHandler.read_trade_log()
 
-    if df.empty:
-        portfolio = pd.DataFrame(columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"])
-        print("Portfolio CSV file not found or empty. Creating new portfolio.")
+    # Get the last snapshot's cash balance and date to use as checkpoint
+    last_snapshot_date = None
+    cash = None
 
-        # Load initial cash from config file
+    if PORTFOLIO_CSV.exists():
+        df = CSVHandler.read_portfolio_csv()
+        if not df.empty:
+            df_total = df[df["Ticker"] == "TOTAL"].copy()
+            df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
+            valid_total = df_total[pd.notna(df_total["Cash Balance"])].sort_values("Date")
+
+            if not valid_total.empty:
+                last_snapshot_date = valid_total.iloc[-1]["Date"].date().isoformat()
+                cash = float(valid_total.iloc[-1]["Cash Balance"])
+                logger.info("Using last snapshot cash checkpoint: $%.2f from %s", cash, last_snapshot_date)
+
+    # If no snapshot exists, use config initial cash
+    if cash is None:
         config = load_config()
         cash = config["initial_cash"]
-        print(f"Using initial cash amount from config: ${cash:.2f}")
-        print("(Use --update-cash command line option to change this value)")
+        logger.info("No snapshot found. Using config initial cash: $%.2f", cash)
 
+    # Portfolio state: {ticker: {shares, total_cost, stop_loss}}
+    portfolio = {}
+
+    if trade_log.empty:
+        logger.info("Trade log is empty.")
         return portfolio, cash
 
-    # Get the latest date from non-TOTAL rows
-    non_total = df[df["Ticker"] != "TOTAL"].copy()
-    non_total["Date"] = pd.to_datetime(non_total["Date"], format="mixed", errors="coerce")
+    logger.info("Rebuilding portfolio from %d trades in log", len(trade_log))
 
-    latest_date = non_total["Date"].max()
-    latest_tickers = non_total[non_total["Date"] == latest_date].copy()
+    for _, trade in trade_log.iterrows():
+        ticker = str(trade["Ticker"]).upper()
+        trade_date = str(trade["Date"])
 
-    # Load only HOLD, BUY, and NO DATA positions from the latest date
-    # These represent the complete portfolio state after all that day's trades
-    hold_positions = latest_tickers[
-        (latest_tickers["Action"].astype(str) == "HOLD") |
-        (latest_tickers["Action"].astype(str) == "BUY") |
-        (latest_tickers["Action"].astype(str) == "NO DATA")
-    ]
+        # Determine if this trade affects cash (only trades after last snapshot)
+        affects_cash = (last_snapshot_date is None) or (trade_date > last_snapshot_date)
 
+        # Process BUY trades
+        if pd.notna(trade.get("Shares Bought")) and float(trade["Shares Bought"]) > 0:
+            shares_bought = float(trade["Shares Bought"])
+            buy_price = float(trade["Buy Price"]) if pd.notna(trade["Buy Price"]) else 0.0
+            cost_basis = float(trade["Cost Basis"]) if pd.notna(trade["Cost Basis"]) else shares_bought * buy_price
+
+            # Calculate stop loss from buy price (assume 8% if not specified)
+            stop_loss_pct = 8.0
+            stop_loss = buy_price * (1 - stop_loss_pct / 100)
+
+            if ticker not in portfolio:
+                portfolio[ticker] = {
+                    'shares': shares_bought,
+                    'total_cost': cost_basis,
+                    'stop_loss': stop_loss
+                }
+            else:
+                # Add to existing position
+                portfolio[ticker]['shares'] += shares_bought
+                portfolio[ticker]['total_cost'] += cost_basis
+                # Update stop loss to the most recent one
+                portfolio[ticker]['stop_loss'] = stop_loss
+
+            # Only adjust cash for trades after the last snapshot
+            if affects_cash:
+                cash -= cost_basis
+                logger.debug("BUY: %s %.4f shares @ $%.2f (after checkpoint), cash now $%.2f", ticker, shares_bought, buy_price, cash)
+
+        # Process SELL trades
+        if pd.notna(trade.get("Shares Sold")) and float(trade["Shares Sold"]) > 0:
+            shares_sold = float(trade["Shares Sold"])
+            sell_price = float(trade["Sell Price"]) if pd.notna(trade["Sell Price"]) else 0.0
+            proceeds = shares_sold * sell_price
+
+            if ticker in portfolio:
+                portfolio[ticker]['shares'] -= shares_sold
+
+                # Calculate proportional cost reduction
+                if portfolio[ticker]['shares'] > 0:
+                    cost_per_share = portfolio[ticker]['total_cost'] / (portfolio[ticker]['shares'] + shares_sold)
+                    portfolio[ticker]['total_cost'] -= cost_per_share * shares_sold
+                else:
+                    # Complete sale
+                    del portfolio[ticker]
+                    logger.debug("SELL: %s complete sale, removed from portfolio", ticker)
+
+            # Only adjust cash for trades after the last snapshot
+            if affects_cash:
+                cash += proceeds
+                logger.debug("SELL: %s %.4f shares @ $%.2f (after checkpoint), cash now $%.2f", ticker, shares_sold, sell_price, cash)
+
+    # Calculate average buy price for each position
+    for ticker, pos in portfolio.items():
+        if pos['shares'] > 0:
+            pos['buy_price'] = pos['total_cost'] / pos['shares']
+        else:
+            pos['buy_price'] = 0.0
+
+    logger.info("Portfolio rebuilt: %d positions, cash $%.2f", len(portfolio), cash)
+    return portfolio, cash
+
+def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
+    """
+    Load portfolio state using trade log as single source of truth.
+
+    REFACTORED APPROACH:
+    - Trade log is the authoritative source of all positions
+    - Rebuild portfolio by replaying all trades from the log
+    - Portfolio snapshot CSV is just for convenience/viewing
+    - This eliminates sync issues and complex reconciliation logic
+
+    Returns:
+        - portfolio: List of position dicts (compatible with existing code)
+        - cash: Current cash balance
+    """
+    logger.info("Loading portfolio state from trade log (single source of truth)")
+
+    # Rebuild from trade log (the authoritative source)
+    portfolio_dict, cash = rebuild_portfolio_from_trades()
+
+    # Convert dict format to list format for compatibility with existing code
     current_positions = []
-    for _, row in hold_positions.iterrows():
-        ticker = str(row["Ticker"]).upper()
-        shares = float(row["Shares"]) if pd.notna(row["Shares"]) else 0.0
-
-        # Only include positions with shares > 0
-        if shares > 0:
+    for ticker, pos in portfolio_dict.items():
+        if pos['shares'] > 0:
             current_positions.append({
                 'ticker': ticker,
-                'shares': shares,
-                'cost_basis': float(row["Cost Basis"]) if pd.notna(row["Cost Basis"]) else 0.0,
-                'buy_price': float(row["Buy Price"]) if pd.notna(row["Buy Price"]) else 0.0,
-                'stop_loss': float(row["Stop Loss"]) if pd.notna(row["Stop Loss"]) else 0.0
+                'shares': round(pos['shares'], 4),
+                'cost_basis': round(pos['total_cost'], 2),
+                'buy_price': round(pos['buy_price'], 2),
+                'stop_loss': round(pos['stop_loss'], 2)
             })
 
-    # Log what we loaded for debugging
-    latest_date_str = latest_date.date().isoformat()
-    logger.info(f"Loaded {len(current_positions)} positions from CSV date: {latest_date_str}")
+    # Apply cash override if set via --set-cash parameter
+    if OVERRIDE_CASH is not None:
+        logger.info(f"Overriding calculated cash ${cash:.2f} with --set-cash value: ${OVERRIDE_CASH:.2f}")
+        cash = OVERRIDE_CASH
 
-    # Load cash balance from the latest TOTAL row
-    df_total = df[df["Ticker"] == "TOTAL"].copy()
-    df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
-
-    # Find the latest TOTAL row with a valid (non-NaN) cash balance
-    valid_total = df_total[pd.notna(df_total["Cash Balance"])]
-    if valid_total.empty:
-        # No valid cash balance found - use config file
-        config = load_config()
-        cash = config["initial_cash"]
-        print(f"No valid cash balance found in CSV. Using initial cash from config: ${cash:.2f}")
-        print("(Use --update-cash command line option to change this value)")
-    else:
-        latest = valid_total.sort_values("Date").iloc[-1]
-        cash = float(latest["Cash Balance"])
-
+    logger.info(f"Portfolio loaded: {len(current_positions)} positions, cash ${cash:.2f}")
     return current_positions, cash
 
 
