@@ -1027,6 +1027,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
         ticker_upper = ticker.upper()
 
         # Determine action (never auto-sell due to stop loss)
+        # Check both buys and sells - if both happened, show BUY (current position from rebuy)
         if ticker_upper in today_buys:
             action = "BUY"
             # Show negative cash flow for purchases
@@ -1035,6 +1036,53 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             total_value += value
             total_pnl += pnl
             position_value = value
+            
+            # If there was ALSO a sell today, add a SELL row first (before the BUY/HOLD row)
+            if ticker_upper in today_sells:
+                # Get sell details from trade log
+                if last_portfolio_date is None or last_portfolio_date >= today_iso:
+                    date_filter = (trade_log["Date"] == today_iso)
+                else:
+                    date_filter = ((trade_log["Date"] > last_portfolio_date) & (trade_log["Date"] <= today_iso))
+                
+                sell_entries = trade_log[
+                    date_filter &
+                    (trade_log["Ticker"].astype(str).str.upper() == ticker_upper) &
+                    (pd.notna(trade_log["Shares Sold"])) &
+                    (trade_log["Shares Sold"] > 0)
+                ]
+                
+                if not sell_entries.empty:
+                    total_shares_sold = sell_entries["Shares Sold"].sum()
+                    sell_entry = sell_entries.iloc[0]
+                    sell_price = float(sell_entry["Sell Price"]) if pd.notna(sell_entry["Sell Price"]) else 0
+                    sell_cost_basis = float(sell_entry["Cost Basis"]) if pd.notna(sell_entry["Cost Basis"]) else 0
+                    sell_pnl = float(sell_entry["PnL"]) if pd.notna(sell_entry["PnL"]) else 0
+                    sell_pnl_pct = (sell_pnl / sell_cost_basis * 100) if sell_cost_basis > 0 else 0
+                    
+                    # Get the OLD buy price from the sell entry
+                    old_buy_price = sell_cost_basis / total_shares_sold if total_shares_sold > 0 else 0
+                    
+                    # Create SELL row for the old position
+                    sell_row = {
+                        "Date": today_iso, "Ticker": ticker, "Shares": round(total_shares_sold, 4),
+                        "Buy Price": round(old_buy_price, 2), "Cost Basis": round(sell_cost_basis, 2), "Stop Loss": "",
+                        "Current Price": round(sell_price, 2), "Total Value": round(total_shares_sold * sell_price, 2),
+                        "PnL": round(sell_pnl, 2), "PnL %": round(sell_pnl_pct, 2),
+                        "Action": "SELL - Manual", "Cash Balance": f"+{today_sells.get(ticker_upper, 0):.2f}",
+                        "Total Equity": "", "Notes": "Sold and rebought",
+                    }
+                    results.append(sell_row)
+            
+            # Now create the BUY/HOLD row for the current position (after sell if applicable)
+            pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
+            row = {
+                "Date": today_iso, "Ticker": ticker, "Shares": round(shares, 4),
+                "Buy Price": round(cost, 2), "Cost Basis": round(cost_basis, 2), "Stop Loss": round(stop, 2),
+                "Current Price": price, "Total Value": round(position_value, 2), "PnL": pnl, "PnL %": round(pnl_pct, 2),
+                "Action": action, "Cash Balance": cash_flow, "Total Equity": "", "Notes": action_note,
+            }
+            results.append(row)
         elif ticker_upper in today_sells:
             # This ticker had a sell today - need to create TWO rows:
             # 1. A SELL row showing what was sold
