@@ -1206,8 +1206,9 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
         # Recalculate starting cash from the last TOTAL row after removing today's entries
         # This ensures we use yesterday's cash balance even if script runs twice on same day
+        # However, skip this if --set-cash override is active
         existing_total = existing[existing["Ticker"] == "TOTAL"].copy()
-        if not existing_total.empty:
+        if not existing_total.empty and OVERRIDE_CASH is None:
             valid_cash = existing_total[pd.notna(existing_total["Cash Balance"])]
             if not valid_cash.empty:
                 # Get the last valid cash balance
