@@ -186,23 +186,39 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
     IMPORTANT: Uses ET timezone to determine the date, not local timezone, to handle
     international users correctly (e.g., Israel, Europe, Asia).
     """
+    global ASOF_DATE
+    if ASOF_DATE is not None and today is None:
+        return ASOF_DATE
+
     try:
         import pytz
         from datetime import datetime as dt_module
 
         et_tz = pytz.timezone('US/Eastern')
 
-        # Get current time in ET timezone (not local timezone!)
-        # This ensures that users in any timezone get consistent behavior
         if today is not None:
             # If explicit date provided, use it
             dt = pd.Timestamp(today)
         else:
-            # Get current UTC time and convert to ET to determine the date
-            current_utc = dt_module.utcnow()
-            dt_aware = pytz.utc.localize(current_utc)
-            dt_et = dt_aware.astimezone(et_tz)
-            # Use ET date, not local date!
+            # If no explicit date, use the effective 'now' which respects ASOF_DATE
+            dt = pd.Timestamp(_effective_now())
+
+        # Get current time in ET timezone (not local timezone!)
+        # This ensures that users in any timezone get consistent behavior
+        if dt.tzinfo is None:
+            # If naive, assume it's in the system's local timezone and convert to ET
+            try:
+                import pytz
+                local_tz = pytz.timezone('America/New_York') # Fallback, should be configured
+                dt_aware = local_tz.localize(dt)
+                dt_et = dt_aware.astimezone(pytz.timezone('US/Eastern'))
+                dt = pd.Timestamp(dt_et)
+            except ImportError:
+                # If pytz is not available, use naive datetime with a warning
+                logger.warning("pytz not installed, cannot perform timezone conversion. Assuming naive datetime is ET.")
+        else:
+            # If already timezone-aware, convert to ET
+            dt_et = dt.astimezone(pytz.timezone('US/Eastern'))
             dt = pd.Timestamp(dt_et)
 
         # Handle weekends first
@@ -778,6 +794,7 @@ def process_portfolio(
     portfolio: pd.DataFrame | dict[str, list[object]] | list[dict[str, object]],
     cash: float,
     interactive: bool = True,
+    override_cash_value: float | None = None,
 ) -> tuple[pd.DataFrame, float]:
     today_iso = last_trading_date().date().isoformat()
     portfolio_df = _ensure_df(portfolio)
@@ -799,13 +816,22 @@ def process_portfolio(
                 if has_real_data:
                     # In interactive mode, allow re-running to add new trades
                     if interactive:
-                        logger.info(f"Today's data ({today_iso}) already exists, but running in interactive mode to allow new trades.")
-                        print(f"Note: Portfolio data for {today_iso} already exists. You can add new trades if needed.")
+                        if override_cash_value is not None:
+                            logger.info(f"Today's data ({today_iso}) already exists, but --set-cash override is active.")
+                            print(f"Note: Portfolio data for {today_iso} already exists. Will update with new cash value.")
+                        else:
+                            logger.info(f"Today's data ({today_iso}) already exists, but running in interactive mode to allow new trades.")
+                            print(f"Note: Portfolio data for {today_iso} already exists. You can add new trades if needed.")
                         # Continue to interactive trade entry, but we'll check later if any trades were actually added
                     else:
-                        logger.info(f"Today's data ({today_iso}) already exists with prices. Skipping portfolio processing.")
-                        print(f"Note: Portfolio data for {today_iso} already exists. Skipping re-processing.")
-                        return portfolio_df, cash
+                        if override_cash_value is not None:
+                            logger.info(f"Today's data ({today_iso}) already exists, but --set-cash override is active.")
+                            print(f"Note: Portfolio data for {today_iso} already exists. Will update with new cash value.")
+                            # Continue to update with override cash
+                        else:
+                            logger.info(f"Today's data ({today_iso}) already exists with prices. Skipping portfolio processing.")
+                            print(f"Note: Portfolio data for {today_iso} already exists. Skipping re-processing.")
+                            return portfolio_df, cash
 
     results: list[dict[str, object]] = []
     total_value = 0.0
@@ -948,7 +974,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     # ------- SIMPLIFIED: Early exit if snapshot already complete -------
     # Since we now load from trade log (single source of truth), we only need to check
     # if today's snapshot exists with prices. No complex reconciliation needed!
-    if interactive and not manual_trades_added:
+    if interactive and not manual_trades_added and override_cash_value is None:
         if PORTFOLIO_CSV.exists():
             existing = CSVHandler.read_portfolio_csv()
             if not existing.empty:
@@ -1173,19 +1199,6 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
     current_tickers = set(portfolio_df["ticker"].astype(str).str.upper()) if not portfolio_df.empty else set()
     SoldPositionHandler.add_sold_positions_to_results(results, today_iso, today_sells, current_tickers, trade_log, last_portfolio_date)
 
-    # ------- Update cash balance based on today's trades -------
-    # Add proceeds from sells
-    for ticker, proceeds in today_sells.items():
-        cash += proceeds
-    # Subtract costs from buys
-    for ticker, cost in today_buy_costs.items():
-        cash -= cost
-
-    # Apply cash override if set via --set-cash parameter
-    if OVERRIDE_CASH is not None:
-        logger.info(f"Overriding calculated cash ${cash:.2f} with --set-cash value: ${OVERRIDE_CASH:.2f}")
-        cash = OVERRIDE_CASH
-
     total_row = {
         "Date": today_iso, "Ticker": "TOTAL", "Shares": "", "Buy Price": "",
         "Cost Basis": "", "Stop Loss": "", "Current Price": "",
@@ -1206,33 +1219,34 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
         # Recalculate starting cash from the last TOTAL row after removing today's entries
         # This ensures we use yesterday's cash balance even if script runs twice on same day
-        # However, skip this if --set-cash override is active
-        existing_total = existing[existing["Ticker"] == "TOTAL"].copy()
-        if not existing_total.empty and OVERRIDE_CASH is None:
-            valid_cash = existing_total[pd.notna(existing_total["Cash Balance"])]
-            if not valid_cash.empty:
-                # Get the last valid cash balance
-                last_cash = float(valid_cash.iloc[-1]["Cash Balance"])
+        if override_cash_value is None:
+            # However, skip this if --set-cash override is active
+            existing_total = existing[existing["Ticker"] == "TOTAL"].copy()
+            if not existing_total.empty:
+                valid_cash = existing_total[pd.notna(existing_total["Cash Balance"])]
+                if not valid_cash.empty:
+                    # Get the last valid cash balance
+                    last_cash = float(valid_cash.iloc[-1]["Cash Balance"])
 
-                # Recalculate today's cash based on the corrected starting balance
-                cash_correction = last_cash - (cash - sum(today_sells.values()) + sum(today_buy_costs.values()))
-                if cash_correction != 0:
-                    logger.info(f"Correcting cash balance: was using {cash:.2f}, should start from {last_cash:.2f}")
-                    cash = last_cash
-                    # Recalculate cash with today's trades
-                    for ticker, proceeds in today_sells.items():
-                        cash += proceeds
-                    for ticker, cost in today_buy_costs.items():
-                        cash -= cost
+                    # Recalculate today's cash based on the corrected starting balance
+                    cash_correction = last_cash - (cash - sum(today_sells.values()) + sum(today_buy_costs.values()))
+                    if cash_correction != 0:
+                        logger.info(f"Correcting cash balance: was using {cash:.2f}, should start from {last_cash:.2f}")
+                        cash = last_cash
+                        # Recalculate cash with today's trades
+                        for ticker, proceeds in today_sells.items():
+                            cash += proceeds
+                        for ticker, cost in today_buy_costs.items():
+                            cash -= cost
 
-                    # Update the TOTAL row with corrected cash
-                    for row in results:
-                        if row["Ticker"] == "TOTAL":
-                            row["Cash Balance"] = round(cash, 2)
-                            row["Total Equity"] = round(total_value + cash, 2)
+                        # Update the TOTAL row with corrected cash
+                        for row in results:
+                            if row["Ticker"] == "TOTAL":
+                                row["Cash Balance"] = round(cash, 2)
+                                row["Total Equity"] = round(total_value + cash, 2)
 
-                    # Recreate df_out with corrected data
-                    df_out = pd.DataFrame(results)
+                        # Recreate df_out with corrected data
+                        df_out = pd.DataFrame(results)
 
         print("Saving results to CSV...")
         df_out = pd.concat([existing, df_out], ignore_index=True)
@@ -2159,66 +2173,33 @@ def load_full_portfolio_history() -> pd.DataFrame:
     """Load the complete portfolio history from CSV file for performance analysis."""
     return CSVHandler.read_portfolio_csv()
 
-def rebuild_portfolio_from_trades() -> tuple[dict[str, dict[str, float]], float]:
+def rebuild_portfolio_from_trades() -> dict[str, dict[str, float]]:
     """
     Rebuild complete portfolio state from trade log (single source of truth).
 
-    HYBRID APPROACH:
-    - Use last snapshot's cash balance as checkpoint (we don't know original starting cash)
-    - Replay ALL trades from log to get current positions (authoritative)
-    - Only adjust cash for trades AFTER the last snapshot date
+    This function focuses ONLY on determining the current holdings (shares, cost, etc.)
+    by replaying the trade log. It does NOT calculate the cash balance.
 
     Returns:
-        - portfolio: Dict of {ticker: {shares, buy_price, cost_basis, stop_loss}}
-        - cash: Current cash balance
+        - portfolio: Dict of {ticker: {shares, total_cost, stop_loss}}
     """
     trade_log = CSVHandler.read_trade_log()
-
-    # Get the last snapshot's cash balance and date to use as checkpoint
-    last_snapshot_date = None
-    cash = None
-
-    if PORTFOLIO_CSV.exists():
-        df = CSVHandler.read_portfolio_csv()
-        if not df.empty:
-            df_total = df[df["Ticker"] == "TOTAL"].copy()
-            df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
-            valid_total = df_total[pd.notna(df_total["Cash Balance"])].sort_values("Date")
-
-            if not valid_total.empty:
-                last_snapshot_date = valid_total.iloc[-1]["Date"].date().isoformat()
-                cash = float(valid_total.iloc[-1]["Cash Balance"])
-                logger.info("Using last snapshot cash checkpoint: $%.2f from %s", cash, last_snapshot_date)
-
-    # If no snapshot exists, use config initial cash
-    if cash is None:
-        config = load_config()
-        cash = config["initial_cash"]
-        logger.info("No snapshot found. Using config initial cash: $%.2f", cash)
-
-    # Portfolio state: {ticker: {shares, total_cost, stop_loss}}
-    portfolio = {}
+    portfolio = {}  # Portfolio state: {ticker: {shares, total_cost, stop_loss}}
 
     if trade_log.empty:
-        logger.info("Trade log is empty.")
-        return portfolio, cash
+        logger.info("Trade log is empty. No portfolio to rebuild.")
+        return portfolio
 
-    logger.info("Rebuilding portfolio from %d trades in log", len(trade_log))
+    logger.info("Rebuilding portfolio holdings from %d trades in log", len(trade_log))
 
     for _, trade in trade_log.iterrows():
         ticker = str(trade["Ticker"]).upper()
-        trade_date = str(trade["Date"])
-
-        # Determine if this trade affects cash (only trades after last snapshot)
-        affects_cash = (last_snapshot_date is None) or (trade_date > last_snapshot_date)
 
         # Process BUY trades
         if pd.notna(trade.get("Shares Bought")) and float(trade["Shares Bought"]) > 0:
             shares_bought = float(trade["Shares Bought"])
             buy_price = float(trade["Buy Price"]) if pd.notna(trade["Buy Price"]) else 0.0
             cost_basis = float(trade["Cost Basis"]) if pd.notna(trade["Cost Basis"]) else shares_bought * buy_price
-
-            # Calculate stop loss from buy price (assume 8% if not specified)
             stop_loss_pct = 8.0
             stop_loss = buy_price * (1 - stop_loss_pct / 100)
 
@@ -2229,85 +2210,86 @@ def rebuild_portfolio_from_trades() -> tuple[dict[str, dict[str, float]], float]
                     'stop_loss': stop_loss
                 }
             else:
-                # Add to existing position
                 portfolio[ticker]['shares'] += shares_bought
                 portfolio[ticker]['total_cost'] += cost_basis
-                # Update stop loss to the most recent one
                 portfolio[ticker]['stop_loss'] = stop_loss
-
-            # Only adjust cash for trades after the last snapshot
-            if affects_cash:
-                cash -= cost_basis
-                logger.debug("BUY: %s %.4f shares @ $%.2f (after checkpoint), cash now $%.2f", ticker, shares_bought, buy_price, cash)
 
         # Process SELL trades
         if pd.notna(trade.get("Shares Sold")) and float(trade["Shares Sold"]) > 0:
             shares_sold = float(trade["Shares Sold"])
-            sell_price = float(trade["Sell Price"]) if pd.notna(trade["Sell Price"]) else 0.0
-            proceeds = shares_sold * sell_price
-
             if ticker in portfolio:
-                portfolio[ticker]['shares'] -= shares_sold
-
-                # Calculate proportional cost reduction
-                if portfolio[ticker]['shares'] > 0:
-                    cost_per_share = portfolio[ticker]['total_cost'] / (portfolio[ticker]['shares'] + shares_sold)
+                # Reduce shares and proportional cost
+                if portfolio[ticker]['shares'] > shares_sold:
+                    cost_per_share = portfolio[ticker]['total_cost'] / portfolio[ticker]['shares']
+                    portfolio[ticker]['shares'] -= shares_sold
                     portfolio[ticker]['total_cost'] -= cost_per_share * shares_sold
                 else:
-                    # Complete sale
                     del portfolio[ticker]
                     logger.debug("SELL: %s complete sale, removed from portfolio", ticker)
 
-            # Only adjust cash for trades after the last snapshot
-            if affects_cash:
-                cash += proceeds
-                logger.debug("SELL: %s %.4f shares @ $%.2f (after checkpoint), cash now $%.2f", ticker, shares_sold, sell_price, cash)
-
-    # Calculate average buy price for each position
+    # Calculate final average buy price for each position
     for ticker, pos in portfolio.items():
         if pos['shares'] > 0:
             pos['buy_price'] = pos['total_cost'] / pos['shares']
         else:
             pos['buy_price'] = 0.0
 
-    logger.info("Portfolio rebuilt: %d positions, cash $%.2f", len(portfolio), cash)
-    return portfolio, cash
+    logger.info("Portfolio holdings rebuilt: %d positions", len(portfolio))
+    return portfolio
+
+def get_latest_cash_balance() -> float:
+    """
+    Get the latest cash balance, respecting the --set-cash override.
+    Source priority:
+    1. --set-cash override
+    2. Last 'TOTAL' row in portfolio CSV
+    3. 'initial_cash' from config.json
+    """
+    if OVERRIDE_CASH is not None:
+        logger.info("Using --set-cash override value: $%.2f", OVERRIDE_CASH)
+        return OVERRIDE_CASH
+
+    if PORTFOLIO_CSV.exists():
+        df = CSVHandler.read_portfolio_csv()
+        if not df.empty:
+            df_total = df[df["Ticker"] == "TOTAL"].copy()
+            df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
+            valid_total = df_total[pd.notna(df_total["Cash Balance"])].sort_values("Date")
+            if not valid_total.empty:
+                cash = float(valid_total.iloc[-1]["Cash Balance"])
+                logger.info("Using last snapshot cash checkpoint: $%.2f", cash)
+                return cash
+
+    config = load_config()
+    cash = config.get("initial_cash", 0.0)
+    logger.info("No snapshot found. Using config initial cash: $%.2f", cash)
+    return cash
+
 
 def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:
     """
-    Load portfolio state using trade log as single source of truth.
-
-    REFACTORED APPROACH:
-    - Trade log is the authoritative source of all positions
-    - Rebuild portfolio by replaying all trades from the log
-    - Portfolio snapshot CSV is just for convenience/viewing
-    - This eliminates sync issues and complex reconciliation logic
-
-    Returns:
-        - portfolio: List of position dicts (compatible with existing code)
-        - cash: Current cash balance
+    Load portfolio state using trade log as single source of truth for holdings
+    and the new cash balance function for cash.
     """
-    logger.info("Loading portfolio state from trade log (single source of truth)")
+    logger.info("Loading latest portfolio state...")
 
-    # Rebuild from trade log (the authoritative source)
-    portfolio_dict, cash = rebuild_portfolio_from_trades()
+    # Get cash balance from the centralized function
+    cash = get_latest_cash_balance()
 
-    # Convert dict format to list format for compatibility with existing code
+    # Rebuild portfolio holdings from the trade log
+    portfolio_dict = rebuild_portfolio_from_trades()
+
+    # Convert dict format to list format for compatibility
     current_positions = []
     for ticker, pos in portfolio_dict.items():
-        if pos['shares'] > 0:
+        if pos.get('shares', 0) > 0:
             current_positions.append({
                 'ticker': ticker,
                 'shares': round(pos['shares'], 4),
-                'cost_basis': round(pos['total_cost'], 2),
-                'buy_price': round(pos['buy_price'], 2),
-                'stop_loss': round(pos['stop_loss'], 2)
+                'cost_basis': round(pos.get('total_cost', 0), 2),
+                'buy_price': round(pos.get('buy_price', 0), 2),
+                'stop_loss': round(pos.get('stop_loss', 0), 2)
             })
-
-    # Apply cash override if set via --set-cash parameter
-    if OVERRIDE_CASH is not None:
-        logger.info(f"Overriding calculated cash ${cash:.2f} with --set-cash value: ${OVERRIDE_CASH:.2f}")
-        cash = OVERRIDE_CASH
 
     logger.info(f"Portfolio loaded: {len(current_positions)} positions, cash ${cash:.2f}")
     return current_positions, cash
@@ -2319,7 +2301,7 @@ def main(data_dir: Path | None = None) -> None:
         set_data_dir(data_dir)
 
     chatgpt_portfolio, cash = load_latest_portfolio_state()
-    chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash)
+    chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash, override_cash_value=OVERRIDE_CASH)
     daily_results(chatgpt_portfolio, cash)
 
 
