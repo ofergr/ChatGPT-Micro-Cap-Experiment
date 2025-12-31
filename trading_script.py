@@ -1062,7 +1062,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
             total_value += value
             total_pnl += pnl
             position_value = value
-            
+
             # If there was ALSO a sell today, add a SELL row first (before the BUY/HOLD row)
             if ticker_upper in today_sells:
                 # Get sell details from trade log
@@ -1070,14 +1070,14 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                     date_filter = (trade_log["Date"] == today_iso)
                 else:
                     date_filter = ((trade_log["Date"] > last_portfolio_date) & (trade_log["Date"] <= today_iso))
-                
+
                 sell_entries = trade_log[
                     date_filter &
                     (trade_log["Ticker"].astype(str).str.upper() == ticker_upper) &
                     (pd.notna(trade_log["Shares Sold"])) &
                     (trade_log["Shares Sold"] > 0)
                 ]
-                
+
                 if not sell_entries.empty:
                     total_shares_sold = sell_entries["Shares Sold"].sum()
                     sell_entry = sell_entries.iloc[0]
@@ -1085,10 +1085,10 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                     sell_cost_basis = float(sell_entry["Cost Basis"]) if pd.notna(sell_entry["Cost Basis"]) else 0
                     sell_pnl = float(sell_entry["PnL"]) if pd.notna(sell_entry["PnL"]) else 0
                     sell_pnl_pct = (sell_pnl / sell_cost_basis * 100) if sell_cost_basis > 0 else 0
-                    
+
                     # Get the OLD buy price from the sell entry
                     old_buy_price = sell_cost_basis / total_shares_sold if total_shares_sold > 0 else 0
-                    
+
                     # Create SELL row for the old position
                     sell_row = {
                         "Date": today_iso, "Ticker": ticker, "Shares": round(total_shares_sold, 4),
@@ -1099,7 +1099,7 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
                         "Total Equity": "", "Notes": "Sold and rebought",
                     }
                     results.append(sell_row)
-            
+
             # Now create the BUY/HOLD row for the current position (after sell if applicable)
             pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
             row = {
@@ -1604,12 +1604,20 @@ def print_instructions() -> None:
         "(insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt above).\n\n"
         "Use this info to make decisions regarding your portfolio. You have complete control over every decision. \n"
         "Make any changes you believe are beneficial—no approval required.\n"
-        "Deep research is not permitted. Act at your discretion to achieve the best outcome.\n"
+        "Deep research is not permitted. Act at your discretion to achieve the best outcome with the following restrictions:\n"
+        "1. Once a position is initiated or increased, it must be held for a minimum of 5 trading days to allow the thesis \n"
+        "to play out, unless the Stop Loss is triggered. Do not churn the portfolio based on short-term sentiment shifts. \n"
+        "2. Define 'Ranging' as a stock that has failed to make a new 20-day high within a 3-week period while the sector \n"
+        "benchmark is rising. Only exit 'ranging' positions if a 'Vertical Momentum' candidate on the Watch List shows a \n"
+        "clear breakout pattern.\n"
+        "3. Define 'Ranging' as a stock that has failed to make a new 20-day high within a 3-week period while the sector \n"
+        "benchmark is rising. Only exit 'ranging' positions if a 'Vertical Momentum' candidate on the Watch List shows a clear\n"
+        "breakout pattern \n"
         "If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains \n"
         "unchanged for tomorrow.\n"
         "You are encouraged to use the internet to check current prices (and related up-to-date info) for potential buys.\n"
-        "My goal is Aggressive Alpha/Momentum. I will not tolerate ranging stocks for the period of the previous 3 months.\n"
-        "I am only interested in high-volatility, explosive growth opportunities.\n"
+        "My goal is Aggressive Alpha/Momentum.\n"
+        "I am only interested in high-volatility, explosive growth opportunities across ALL sectors\n"
         "Market size of the stocks you inspect should not be less then 500M USD\n"
         "There are no additional funds available beyond the cash balance shown.\n"
         "\n"
