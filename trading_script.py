@@ -1605,7 +1605,7 @@ def print_instructions() -> None:
         "Use this info to make decisions regarding your portfolio. You have complete control over every decision. \n"
         "Make any changes you believe are beneficial—no approval required.\n"
         "Deep research is not permitted. Act at your discretion to achieve the best outcome with the following restrictions:\n"
-        "1. Once a position is initiated or increased, it must be held for a minimum of 5 trading days to allow the thesis \n"
+        "1. Once a position is initiated or increased, it must be held for a minimum of 10 trading days to allow the thesis \n"
         "to play out, unless the Stop Loss is triggered. Do not churn the portfolio based on short-term sentiment shifts. \n"
         "2. Define 'Ranging' as a stock that has failed to make a new 20-day high within a 3-week period while the sector \n"
         "benchmark is rising. Only exit 'ranging' positions if a 'Vertical Momentum' candidate on the Watch List shows a \n"
