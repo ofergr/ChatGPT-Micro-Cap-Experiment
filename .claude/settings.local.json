@@ -4,7 +4,8 @@
       "Bash(python3:*)",
       "Bash(npx claude-mem-worker:*)",
       "Bash(npx @thedotmack/claude-mem worker:*)",
-      "Skill(claude-mem:troubleshoot)"
+      "Skill(claude-mem:troubleshoot)",
+      "Bash(npm outdated:*)"
     ],
     "deny": [],
     "ask": []

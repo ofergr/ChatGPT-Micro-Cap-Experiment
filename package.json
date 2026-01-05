@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "@excalidraw/excalidraw": "^0.18.0",
-    "@excalidraw/mermaid-to-excalidraw": "^2.0.0"
-  }
-}
