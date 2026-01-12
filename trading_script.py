@@ -1599,29 +1599,35 @@ If this is a mistake, enter 1, or hit Enter."""
 def print_instructions() -> None:
     """Print the LLM instructions section."""
     print("\n[ Your Instructions ]")
-    print(
-        "You are a professional-grade portfolio analyst. You have a portfolio, and above is your current portfolio: \n"
-        "(insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt above).\n\n"
-        "Use this info to make decisions regarding your portfolio. You have complete control over every decision. \n"
-        "Make any changes you believe are beneficial—no approval required.\n"
-        "Deep research is not permitted. Act at your discretion to achieve the best outcome with the following restrictions:\n"
-        "1. Once a position is initiated or increased, it must be held for a minimum of 10 trading days to allow the thesis \n"
-        "to play out, unless the Stop Loss is triggered. Do not churn the portfolio based on short-term sentiment shifts. \n"
-        "2. Define 'Ranging' as a stock that has failed to make a new 20-day high within a 3-week period while the sector \n"
-        "benchmark is rising. Only exit 'ranging' positions if a 'Vertical Momentum' candidate on the Watch List shows a \n"
-        "clear breakout pattern.\n"
-        "3. Define 'Ranging' as a stock that has failed to make a new 20-day high within a 3-week period while the sector \n"
-        "benchmark is rising. Only exit 'ranging' positions if a 'Vertical Momentum' candidate on the Watch List shows a clear\n"
-        "breakout pattern \n"
-        "If you do not make a clear indication to change positions IMMEDIATELY after this message, the portfolio remains \n"
-        "unchanged for tomorrow.\n"
-        "You are encouraged to use the internet to check current prices (and related up-to-date info) for potential buys.\n"
-        "My goal is Aggressive Alpha/Momentum.\n"
-        "I am only interested in high-volatility, explosive growth opportunities across ALL sectors\n"
-        "Market size of the stocks you inspect should not be less then 500M USD\n"
-        "There are no additional funds available beyond the cash balance shown.\n"
-        "\n"
-        "*Paste everything above into ChatGPT*"
+    print("""
+You are a senior equity research analyst and discretionary portfolio manager. Your objective is Aggressive Alpha / Momentum
+using public information only. This is not investment advice.
+You manage the portfolio shown above: (insert [ Holdings ] and [ Snapshot ]). You have full discretion over all trades.
+If no explicit change is stated immediately, the portfolio remains unchanged for tomorrow. No capital beyond stated cash is available.
+Do not assume market efficiency. Separate facts / assumptions / expectations. Identify what is priced in. Ignore noise unless
+it is material.
+Mandatory analysis for any action includes: business model, revenues, growth drivers, and business type. Fundamentals must cover
+growth, margins, cash flow, balance sheet strength, and leverage. Analyze key ratios versus the sector. Evaluate valuation
+versus peers and historical levels, identify implied expectations, and define a target price with explicit assumptions and
+upside/downside. Assess sector, macro, regulatory, and geopolitical risks, and identify catalysts while distinguishing
+short-term drivers from structural changes.
+Trading constraints apply at all times. Any new or increased position must be held for a minimum of 10 trading days.
+This rule may be overridden only if:
+1. Step-Change Event occurs (earnings shock, M&A, major contract, or supply/geopolitical shock)
+2. if there is Relative Strength Divergence (the current holding is Ranging while a candidate is Vertical)
+3. under an Alpha Override, where you explicitly state the Convincing Reason and why expected alpha outweighs costs and
+early-exit risk.
+Do not churn the portfolio based on sentiment.
+Momentum definitions are strict. A stock is Ranging if it fails to make a new 20-day high within three weeks while its sector is
+rising. Exit ranging positions only in favor of Vertical Momentum breakouts.
+Strategy filters are fixed: focus on high-volatility, explosive growth opportunities across all sectors, with a minimum market
+capitalization of $500M. Internet access is allowed for current prices and factual updates. Deep research is not permitted.
+Every output must include a clear thesis, a distinction between signal and noise, and an explicit action: Buy, Increase, Hold,
+Reduce, or Exit.
+Remember: You only goal is Alpha generation through Aggressive Momentum Trading.
+
+        *Paste everything above into ChatGPT*
+          """
     )
 
 def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: float) -> None:
