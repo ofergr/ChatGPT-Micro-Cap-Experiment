@@ -546,6 +546,12 @@ def save_portfolio_to_csv_with_formatting(df: pd.DataFrame) -> None:
         # Create DataFrame with blank lines
         df_formatted = pd.DataFrame(formatted_rows).reset_index(drop=True)
 
+        # Format Shares column to 4 decimal places to avoid truncation (e.g., 0.4375 -> 0.43)
+        if 'Shares' in df_formatted.columns:
+            df_formatted['Shares'] = df_formatted['Shares'].apply(
+                lambda x: f'{x:.4f}' if pd.notna(x) and isinstance(x, (int, float)) else x
+            )
+
         # Save to CSV
         df_formatted.to_csv(csv_path, index=False)
         logger.info("Successfully wrote formatted CSV file: %s", csv_path)
@@ -1143,7 +1149,9 @@ Would you like to log a manual trade? Enter 'b' for buy, 's' for sell, or press 
 
                 # Check if this is a complete sale (all shares sold)
                 # Add small tolerance for floating point precision
-                is_complete_sale = abs(total_shares_sold - shares) < 1e-6
+                # Also check if remaining shares round to 0 (to avoid showing 0.0 shares as HOLD)
+                remaining_shares = shares - total_shares_sold
+                is_complete_sale = abs(total_shares_sold - shares) < 1e-6 or round(remaining_shares, 4) <= 0
 
                 # Create SELL row (showing what was sold)
                 sell_row = {
@@ -2237,6 +2245,10 @@ def rebuild_portfolio_from_trades() -> dict[str, dict[str, float]]:
                     cost_per_share = portfolio[ticker]['total_cost'] / portfolio[ticker]['shares']
                     portfolio[ticker]['shares'] -= shares_sold
                     portfolio[ticker]['total_cost'] -= cost_per_share * shares_sold
+                    # Clean up floating point precision errors (if shares round to 0, remove position)
+                    if round(portfolio[ticker]['shares'], 4) <= 0:
+                        del portfolio[ticker]
+                        logger.debug("SELL: %s complete sale (after rounding), removed from portfolio", ticker)
                 else:
                     del portfolio[ticker]
                     logger.debug("SELL: %s complete sale, removed from portfolio", ticker)
@@ -2296,7 +2308,8 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     # Convert dict format to list format for compatibility
     current_positions = []
     for ticker, pos in portfolio_dict.items():
-        if pos.get('shares', 0) > 0:
+        # Use rounded value to avoid floating point precision issues
+        if round(pos.get('shares', 0), 4) > 0:
             current_positions.append({
                 'ticker': ticker,
                 'shares': round(pos['shares'], 4),
