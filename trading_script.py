@@ -1625,6 +1625,7 @@ This rule may be overridden only if:
 2. if there is Relative Strength Divergence (the current holding is Ranging while a candidate is Vertical)
 3. under an Alpha Override, where you explicitly state the Convincing Reason and why expected alpha outweighs costs and
 early-exit risk.
+
 Do not churn the portfolio based on sentiment.
 Momentum definitions are strict. A stock is Ranging if it fails to make a new 20-day high within three weeks while its sector is
 rising. Exit ranging positions only in favor of Vertical Momentum breakouts.
