@@ -1599,12 +1599,30 @@ If this is a mistake, enter 1, or hit Enter."""
     return cash, chatgpt_portfolio
 
 
-
 # ------------------------------
 # Reporting / Metrics
 # ------------------------------
+def set_prompt(weekly=False):
+    if (weekly==True):
+        print_weekly_instructions()
+    else:
+        print_daily_instructions()
 
-def print_instructions() -> None:
+def print_weekly_instructions() -> None:
+    """Print the LLM instructions section."""
+    print("\n[ Your Instructions ]")
+    print("""
+You are a professional-grade portfolio analyst. You have a portfolio, and this is your current portfolio: (insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily prompt).
+Use deep research to reevaluate your portfolio. You can look for new tickers and check existing ones. You have complete control, for markets above 500M USD.
+Use foddemental and technical analysis. Avoid ranging stocks (time frame for ranging is 3 months).
+You can explore any industry, as long as it is aligned with the main goal.
+You can buy or sell anything as long as you have the capital available. Remember your only goal is alpha
+
+    *Paste everything above into ChatGPT*
+          """
+    )
+
+def print_daily_instructions() -> None:
     """Print the LLM instructions section."""
     print("\n[ Your Instructions ]")
     print("""
@@ -1653,7 +1671,7 @@ outlook, and a clear distinction between Signal and Noise.
 weeks undergoes Mandatory Review for exit.
 -Clear Directives: Conclude with: Buy, Increase, Hold, Reduce, or Exit,
 alongside updated [Holdings] and [Snapshot] tables.
-    
+
     *Paste everything above into ChatGPT*
           """
     )
@@ -1767,7 +1785,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
         else:
             mdd_date_str = str(mdd_date)
         print(f"Maximum Drawdown: {max_drawdown:.2%} (on {mdd_date_str})")
-        print_instructions()
+        set_prompt(args.weekly)
         return
 
     # Risk-free config
@@ -1997,7 +2015,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
     else:
         print("No current holdings to display.")
 
-    print_instructions()
+    set_prompt(args.weekly)
 
 
 # ------------------------------
@@ -2365,6 +2383,7 @@ if __name__ == "__main__":
                        help="Update the initial cash amount in config file (e.g., --update-cash 612.00)")
     parser.add_argument("--set-cash", type=float, default=None,
                        help="Override the calculated cash balance with a specific amount (e.g., --set-cash 273.00)")
+    parser.add_argument("--weekly", action="store_true", default=False, help="Present weekly prompt")
     args = parser.parse_args()
 
 
