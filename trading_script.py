@@ -18,9 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime
-from datetime import timedelta
 from pathlib import Path
-from typing import Any, cast,Dict, List, Optional
+from typing import Any, cast
 import os
 import warnings
 
@@ -95,11 +94,7 @@ def _log_initial_state():
 # Configuration helpers — benchmark tickers (tickers.json)
 # ------------------------------
 
-
-
-logger = logging.getLogger(__name__)
-
-def _read_json_file(path: Path) -> Optional[Dict]:
+def _read_json_file(path: Path) -> dict | None:
     """Read and parse JSON from `path`. Return dict on success, None if not found or invalid.
 
     - FileNotFoundError -> return None
@@ -122,7 +117,7 @@ def _read_json_file(path: Path) -> Optional[Dict]:
         logger.warning("Unable to read tickers.json (%s): %s. Falling back to defaults.", path, exc)
         return None
 
-def load_benchmarks(script_dir: Path | None = None) -> List[str]:
+def load_benchmarks(script_dir: Path | None = None) -> list[str]:
     """Return a list of benchmark tickers.
 
     Looks for a `tickers.json` file in either:
@@ -204,22 +199,14 @@ def last_trading_date(today: datetime.datetime | None = None) -> pd.Timestamp:
             dt = pd.Timestamp(_effective_now())
 
         # Get current time in ET timezone (not local timezone!)
-        # This ensures that users in any timezone get consistent behavior
+        # This ensures that users in any timezone get consistent behavior.
+        # For naive datetimes we treat the value as ET directly (the script
+        # is always operating on US market hours, so this is the correct assumption).
         if dt.tzinfo is None:
-            # If naive, assume it's in the system's local timezone and convert to ET
-            try:
-                import pytz
-                local_tz = pytz.timezone('America/New_York') # Fallback, should be configured
-                dt_aware = local_tz.localize(dt)
-                dt_et = dt_aware.astimezone(pytz.timezone('US/Eastern'))
-                dt = pd.Timestamp(dt_et)
-            except ImportError:
-                # If pytz is not available, use naive datetime with a warning
-                logger.warning("pytz not installed, cannot perform timezone conversion. Assuming naive datetime is ET.")
+            dt = pd.Timestamp(et_tz.localize(dt.to_pydatetime()))
         else:
             # If already timezone-aware, convert to ET
-            dt_et = dt.astimezone(pytz.timezone('US/Eastern'))
-            dt = pd.Timestamp(dt_et)
+            dt = pd.Timestamp(dt.astimezone(et_tz))
 
         # Handle weekends first
         if dt.weekday() == 5:  # Sat -> Fri
@@ -361,9 +348,13 @@ def _yahoo_download(ticker: str, **kwargs: Any) -> pd.DataFrame:
             return pd.DataFrame()
     return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
-def _stooq_csv_download(ticker: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    """Fetch OHLCV from Stooq CSV endpoint (daily). Good for US tickers and many ETFs."""
-    import requests, io
+def _stooq_csv_download(ticker: str, start: pd.Timestamp, end: pd.Timestamp, _delay: float = 0.5) -> pd.DataFrame:
+    """Fetch OHLCV from Stooq CSV endpoint (daily). Good for US tickers and many ETFs.
+
+    _delay: seconds to sleep before the request to avoid Stooq rate-limiting when
+    called in a tight loop over many tickers. Pass 0 to disable.
+    """
+    import requests, io, time
     if ticker in STOOQ_BLOCKLIST:
         return pd.DataFrame()
     t = STOOQ_MAP.get(ticker, ticker)
@@ -378,6 +369,8 @@ def _stooq_csv_download(ticker: str, start: pd.Timestamp, end: pd.Timestamp) -> 
 
     url = f"https://stooq.com/q/d/l/?s={sym}&i=d"
     try:
+        if _delay > 0:
+            time.sleep(_delay)
         r = requests.get(url, timeout=10)
         if r.status_code != 200 or not r.text.strip():
             return pd.DataFrame()
@@ -413,9 +406,6 @@ def _stooq_download(
         t = t.lower()
 
     try:
-        # Ensure pdr is imported locally if not available globally
-        if not _HAS_PDR:
-            return pd.DataFrame()
         import pandas_datareader.data as pdr_local
         df = cast(pd.DataFrame, pdr_local.DataReader(t, "stooq", start=start, end=end))
         df.sort_index(inplace=True)
@@ -430,9 +420,9 @@ def _weekend_safe_range(period: str | None, start: Any, end: Any) -> tuple[pd.Ti
     - If period is '1d': use the last trading day's [Fri, Sat) window on weekends.
     - If period like '2d'/'5d': build a window ending at the last trading day.
     """
-    if start or end:
-        end_ts = pd.Timestamp(end) if end else last_trading_date() + pd.Timedelta(days=1)
-        start_ts = pd.Timestamp(start) if start else (end_ts - pd.Timedelta(days=5))
+    if start is not None or end is not None:
+        end_ts = pd.Timestamp(end) if end is not None else last_trading_date() + pd.Timedelta(days=1)
+        start_ts = pd.Timestamp(start) if start is not None else (end_ts - pd.Timedelta(days=5))
         return start_ts.normalize(), pd.Timestamp(end_ts).normalize()
 
     # No explicit dates; derive from period
@@ -1321,109 +1311,20 @@ def log_manual_buy(
     chatgpt_portfolio: pd.DataFrame,
     interactive: bool = True,
 ) -> tuple[float, pd.DataFrame]:
-    today = check_weekend()
-
-    if interactive:
-        check = input(
-            f"You are placing a BUY LIMIT for {shares} {ticker} at ${buy_price:.2f}.\n"
-            f"If this is a mistake, type '1' or, just hit Enter: "
-        )
-        if check == "1":
-            print("Returning...")
-            return cash, chatgpt_portfolio
-
-    if not isinstance(chatgpt_portfolio, pd.DataFrame) or chatgpt_portfolio.empty:
-        chatgpt_portfolio = pd.DataFrame(
-            columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"]
-        )
-
-    s, e = trading_day_window()
-    fetch = download_price_data(ticker, start=s, end=e, auto_adjust=False, progress=False)
-    data = fetch.df
-    if data.empty:
-        print(f"Manual buy for {ticker} failed: no market data available (source={fetch.source}).")
+    """Delegate to process_buy_order() for a limit buy simulation."""
+    stop_loss_pct = (1 - stoploss / buy_price) * 100 if buy_price > 0 and stoploss > 0 else 0.0
+    result = process_buy_order(
+        order_type="l",
+        ticker=ticker,
+        shares=shares,
+        order_price=buy_price,
+        stop_loss_pct=stop_loss_pct,
+        cash=cash,
+        portfolio_df=chatgpt_portfolio,
+    )
+    if result is None:
         return cash, chatgpt_portfolio
-
-    if "Open" in data.columns and not data["Open"].empty:
-        o = float(data["Open"].iloc[-1])
-    else:
-        o = np.nan
-    h = float(data["High"].iloc[-1])
-    l = float(data["Low"].iloc[-1])
-    if np.isnan(o):
-        o = float(data["Close"].iloc[-1])
-
-    if o <= buy_price:
-        exec_price = o
-    elif l <= buy_price:
-        exec_price = buy_price
-    else:
-        print(f"Buy limit ${buy_price:.2f} for {ticker} not reached today (range {l:.2f}-{h:.2f}). Order not filled.")
-        return cash, chatgpt_portfolio
-
-    cost_amt = exec_price * shares
-    if cost_amt > cash:
-        print(f"Manual buy for {ticker} failed: cost {cost_amt:.2f} exceeds cash balance {cash:.2f}.")
-        return cash, chatgpt_portfolio
-
-    log = {
-        "Date": today,
-        "Ticker": ticker,
-        "Shares Bought": shares,
-        "Buy Price": exec_price,
-        "Cost Basis": cost_amt,
-        "PnL": 0.0,
-        "Reason": "MANUAL BUY LIMIT - Filled",
-    }
-    if os.path.exists(TRADE_LOG_CSV):
-        logger.info("Reading CSV file: %s", TRADE_LOG_CSV)
-        df = pd.read_csv(TRADE_LOG_CSV)
-        logger.info("Successfully read CSV file: %s", TRADE_LOG_CSV)
-        if df.empty:
-            df = pd.DataFrame([log])
-        else:
-            df = pd.concat([df, pd.DataFrame([log])], ignore_index=True)
-    else:
-        df = pd.DataFrame([log])
-    logger.info("Writing CSV file: %s", TRADE_LOG_CSV)
-    df.to_csv(TRADE_LOG_CSV, index=False)
-    logger.info("Successfully wrote CSV file: %s", TRADE_LOG_CSV)
-
-    rows = chatgpt_portfolio.loc[chatgpt_portfolio["ticker"].str.upper() == ticker.upper()]
-    if rows.empty:
-        if chatgpt_portfolio.empty:
-            chatgpt_portfolio = pd.DataFrame([{
-                "ticker": ticker,
-                "shares": float(shares),
-                "stop_loss": float(stoploss),
-                "buy_price": float(exec_price),
-                "cost_basis": float(cost_amt),
-            }])
-        else:
-            chatgpt_portfolio = pd.concat(
-                [chatgpt_portfolio, pd.DataFrame([{
-                    "ticker": ticker,
-                    "shares": float(shares),
-                    "stop_loss": float(stoploss),
-                    "buy_price": float(exec_price),
-                    "cost_basis": float(cost_amt),
-                }])],
-                ignore_index=True
-            )
-    else:
-        idx = rows.index[0]
-        cur_shares = float(chatgpt_portfolio.at[idx, "shares"])
-        cur_cost = float(chatgpt_portfolio.at[idx, "cost_basis"])
-        new_shares = cur_shares + float(shares)
-        new_cost = cur_cost + float(cost_amt)
-        chatgpt_portfolio.at[idx, "shares"] = new_shares
-        chatgpt_portfolio.at[idx, "cost_basis"] = new_cost
-        chatgpt_portfolio.at[idx, "buy_price"] = new_cost / new_shares if new_shares else 0.0
-        chatgpt_portfolio.at[idx, "stop_loss"] = float(stoploss)
-
-    cash -= cost_amt
-    print(f"Manual BUY LIMIT for {ticker} filled at ${exec_price:.2f} ({fetch.source}).")
-    return cash, chatgpt_portfolio
+    return result
 
 def log_executed_buy(
     exec_price: float,
@@ -1435,87 +1336,21 @@ def log_executed_buy(
     interactive: bool = True,
 ) -> tuple[float, pd.DataFrame]:
     """Log a buy transaction that was already executed at a specific price.
-    No market data simulation - records the exact price provided.
+    Delegates to process_buy_order() — no market data simulation.
     """
-    today = check_weekend()
-
-    if interactive:
-        check = input(
-            f"Logging EXECUTED buy: {shares} {ticker} at ${exec_price:.2f}.\n"
-            f"If this is a mistake, type '1' or, just hit Enter: "
-        )
-        if check == "1":
-            print("Returning...")
-            return cash, chatgpt_portfolio
-
-    if not isinstance(chatgpt_portfolio, pd.DataFrame) or chatgpt_portfolio.empty:
-        chatgpt_portfolio = pd.DataFrame(
-            columns=["ticker", "shares", "stop_loss", "buy_price", "cost_basis"]
-        )
-
-    cost_amt = exec_price * shares
-    if cost_amt > cash:
-        print(f"Executed buy for {ticker} failed: cost {cost_amt:.2f} exceeds cash balance {cash:.2f}.")
+    stop_loss_pct = (1 - stoploss / exec_price) * 100 if exec_price > 0 and stoploss > 0 else 0.0
+    result = process_buy_order(
+        order_type="e",
+        ticker=ticker,
+        shares=shares,
+        order_price=exec_price,
+        stop_loss_pct=stop_loss_pct,
+        cash=cash,
+        portfolio_df=chatgpt_portfolio,
+    )
+    if result is None:
         return cash, chatgpt_portfolio
-
-    log = {
-        "Date": today,
-        "Ticker": ticker,
-        "Shares Bought": shares,
-        "Buy Price": exec_price,
-        "Cost Basis": cost_amt,
-        "PnL": 0.0,
-        "Reason": "MANUAL BUY EXECUTED - Already Filled",
-    }
-    if os.path.exists(TRADE_LOG_CSV):
-        logger.info("Reading CSV file: %s", TRADE_LOG_CSV)
-        df = pd.read_csv(TRADE_LOG_CSV)
-        logger.info("Successfully read CSV file: %s", TRADE_LOG_CSV)
-        if df.empty:
-            df = pd.DataFrame([log])
-        else:
-            df = pd.concat([df, pd.DataFrame([log])], ignore_index=True)
-    else:
-        df = pd.DataFrame([log])
-    logger.info("Writing CSV file: %s", TRADE_LOG_CSV)
-    df.to_csv(TRADE_LOG_CSV, index=False)
-    logger.info("Successfully wrote CSV file: %s", TRADE_LOG_CSV)
-
-    rows = chatgpt_portfolio.loc[chatgpt_portfolio["ticker"].str.upper() == ticker.upper()]
-    if rows.empty:
-        if chatgpt_portfolio.empty:
-            chatgpt_portfolio = pd.DataFrame([{
-                "ticker": ticker,
-                "shares": float(shares),
-                "stop_loss": float(stoploss),
-                "buy_price": float(exec_price),
-                "cost_basis": float(cost_amt),
-            }])
-        else:
-            chatgpt_portfolio = pd.concat(
-                [chatgpt_portfolio, pd.DataFrame([{
-                    "ticker": ticker,
-                    "shares": float(shares),
-                    "stop_loss": float(stoploss),
-                    "buy_price": float(exec_price),
-                    "cost_basis": float(cost_amt),
-                }])],
-                ignore_index=True
-            )
-    else:
-        idx = rows.index[0]
-        cur_shares = float(chatgpt_portfolio.at[idx, "shares"])
-        cur_cost = float(chatgpt_portfolio.at[idx, "cost_basis"])
-        new_shares = cur_shares + float(shares)
-        new_cost = cur_cost + float(cost_amt)
-        chatgpt_portfolio.at[idx, "shares"] = new_shares
-        chatgpt_portfolio.at[idx, "cost_basis"] = new_cost
-        chatgpt_portfolio.at[idx, "buy_price"] = new_cost / new_shares if new_shares else 0.0
-        chatgpt_portfolio.at[idx, "stop_loss"] = float(stoploss)
-
-    cash -= cost_amt
-    print(f"Executed BUY for {ticker} logged at ${exec_price:.2f}.")
-    return cash, chatgpt_portfolio
+    return result
 
 def log_manual_sell(
     sell_price: float,
@@ -1677,7 +1512,7 @@ alongside updated [Holdings] and [Snapshot] tables.
           """
     )
 
-def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: float) -> None:
+def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: float, show_weekly_prompt: bool = False) -> None:
     """Print daily price updates and performance metrics (incl. CAPM)."""
     # Handle both DataFrame and list[dict] input
     if isinstance(chatgpt_portfolio, pd.DataFrame):
@@ -1786,7 +1621,7 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
         else:
             mdd_date_str = str(mdd_date)
         print(f"Maximum Drawdown: {max_drawdown:.2%} (on {mdd_date_str})")
-        set_prompt(args.weekly)
+        set_prompt(show_weekly_prompt)
         return
 
     # Risk-free config
@@ -2361,14 +2196,14 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     return current_positions, cash
 
 
-def main(data_dir: Path | None = None) -> None:
+def main(data_dir: Path | None = None, show_weekly_prompt: bool = False) -> None:
     """Check versions, then run the trading script."""
     if data_dir is not None:
         set_data_dir(data_dir)
 
     chatgpt_portfolio, cash = load_latest_portfolio_state()
     chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash, override_cash_value=OVERRIDE_CASH)
-    daily_results(chatgpt_portfolio, cash)
+    daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt)
 
 
 if __name__ == "__main__":
@@ -2411,4 +2246,4 @@ if __name__ == "__main__":
     if args.set_cash is not None:
         set_override_cash(args.set_cash)
 
-    main(Path(args.data_dir) if args.data_dir else None)
+    main(Path(args.data_dir) if args.data_dir else None, show_weekly_prompt=args.weekly)
