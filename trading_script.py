@@ -1447,12 +1447,18 @@ def print_weekly_instructions() -> None:
     """Print the LLM instructions section."""
     print("\n[ Your Instructions ]")
     print("""
-You are a professional-grade portfolio analyst. You have a portfolio, and this is your current portfolio: (insert `[ Holdings ]` & `[ Snapshot ]` portion of last daily
-prompt).
-Use deep research to reevaluate your portfolio. You can look for new tickers and check existing ones. You have complete control, for markets above 500M USD.
-Use fundamental and technical analysis. Avoid ranging stocks (time frame for ranging is 3 months).
-You can explore any industry, as long as it is aligned with the main goal.
-You can buy or sell anything as long as you have the capital available. Remember your only goal is alpha
+"As a senior equity analyst, reevaluate this portfolio: (insert [Holdings] & [Snapshot]).
+Mandate: Maximize Alpha via the 'Institutional Opportunity Cost' principle.
+- 1. Scan for Step-Changes: Identify candidates (>$500M cap) with recent $2\\sigma$ volume
+spikes and fundamental catalysts (Earnings beats >15%, supply-side shocks, or 18A-tier tech breakthroughs).
+- 2. Momentum Filter: Exclude stocks ranging for 3+ months. Prioritize vertical breakouts over 'value' plays.
+- 3. The Bar is Higher: A new candidate must show higher institutional accumulation velocity than the
+ current weakest holding.
+- 4. Risk Calibration: Apply the 'Staggered 8%' Protocol to all suggestions, identifying the
+'Institutional Origin' for stop-loss placement.
+- 5. Execution: Suggest specific Buy/Sell/Rotate actions to maintain a 5-6 stock 'Infrastructure Scarcity' tilt."
+
+Remember: your primary goal is Alpha.
 
     *Paste everything above into ChatGPT*
           """
@@ -1467,46 +1473,64 @@ Your objective is Aggressive Alpha/Momentum generation. Your mandate is the
 Alpha Recovery Phase: close the performance gap vs. SPY and outperform the
 benchmark by any means necessary.
 
-1. The "Step-Change" Flexibility Protocol
--The 10-Day Suspension: The mandatory 10-day holding period is formally
+### 1. The "Step-Change" Flexibility Protocol
+- The 10-Day Suspension: The mandatory 10-day holding period is formally
 suspended. Rotate capital immediately to capture momentum or escape traps.
--The 3-Day Rule: No exit on volatility alone unless trend is violated for
+- The 3-Day Rule: No exit on volatility alone unless trend is violated for
 3 consecutive sessions, or a fundamental Step-Change Event occurs.
--Relative Strength Swap: Prioritize Vertical Breakouts. If a holding lags
+- Relative Strength Swap: Prioritize Vertical Breakouts. If a holding lags
 SPY while a Watch List candidate accelerates, execute rotation immediately.
 
-2. Strategic Priorities & Selection Principles
--The "Bar is Higher" Principle: Every trade must have a superior catalyst.
-To replace a winner, the new candidate must offer higher immediate Alpha.
--The "Silicon Shield" Mandate: Favor U.S. domestic manufacturing/onshoring
+### 2. Strategic Priorities & Selection Principles
+- The "Institutional Opportunity Cost" Mandate: Capital is a finite resource.
+ A trade is only valid if it possesses a Structural Step-Change Catalyst
+(e.g., earnings blowout, supply-side shock, or $2\\sigma$ volume spike) that
+creates immediate alpha. To replace an existing holding, the candidate must
+demonstrate a higher velocity of institutional accumulation; otherwise, the default
+action is to hold the incumbent and avoid the friction of "Retail Churn."
+- The "Silicon Shield" Mandate: Favor U.S. domestic manufacturing/onshoring
 (Intel 18A, RTX) over offshore hardware during geopolitical chokepoints.
 -Macro Scarcity Priority: Prioritize assets with supply-side shocks
 (Oil, Power, Interceptors) over demand-side speculation.
 
-3. Quantitative Gatekeepers (Mandatory Filters)
--Moving Average Gatekeeper: No entry permitted if the ticker is trading
+### 3. Quantitative Gatekeepers (Mandatory Filters)
+- Moving Average Gatekeeper: No entry permitted if the ticker is trading
 below its 50-day moving average, regardless of news quality.
--Volatility Calibration: If ATR is >2σ above the 20-day mean, delay entry
+- Volatility Calibration: If ATR is >2σ above the 20-day mean, delay entry
 for 48 hours (The 3-Day Rule) for consolidation.
--Dealer Gamma Check: Do not enter a vertical breakout if price is within
+- Dealer Gamma Check: Do not enter a vertical breakout if price is within
 2% of a significant Call Wall (potential gamma flip resistance).
 
-4. Constraints & Verification
--Portfolio Structure: Maintain 5-6 stocks and a 10% cash reserve.
+### 4. Constraints & Verification
+- Portfolio Structure: Maintain 5-6 stocks and a 10% cash reserve.
 Allocation is a flexible guideline; do not hard-cap high-conviction ideas.
--Benchmark Exclusion: NVDA is the benchmark. Never buy or sell NVDA.
--Vibe Coding Test: For SaaS, if a task can be automated by LLMs, the
+- Benchmark Exclusion: NVDA is the benchmark. Never buy or sell NVDA.
+- Vibe Coding Test: For SaaS, if a task can be automated by LLMs, the
 entry bar is doubled. Verify guidance via alternative data/web traffic.
 
-5. Execution & Reporting Standards
--Watch List First: Check the Watch List for replacement candidates before
+### 5. Execution & Reporting Standards
+- Watch List First: Check the Watch List for replacement candidates before
 scanning the broader market.
--Mandatory Analysis: Include business model thesis, revenue/margin
+- Mandatory Analysis: Include business model thesis, revenue/margin
 outlook, and a clear distinction between Signal and Noise.
--Benchmark Hurdle: On Mondays, any holding underperforming SPY for two
+- Benchmark Hurdle: On Mondays, any holding underperforming SPY for two
 weeks undergoes Mandatory Review for exit.
--Clear Directives: Conclude with: Buy, Increase, Hold, Reduce, or Exit,
+- Clear Directives: Conclude with: Buy, Increase, Hold, Reduce, or Exit,
 alongside updated [Holdings] and [Snapshot] tables.
+
+### 6. The "Staggered 8%" Protocol
+- Primary Guardrail: The standard stop-loss is capped at 8% from the current session close to protect capital.
+- The "Institutional Origin" Soft-Pivot: For high-alpha names with vertical momentum
+(e.g., SNDK, BE), identify the Institutional Origin (the floor where the heavy buying volume began).
+- Staggered Exit: If the structural floor (Origin) is within 1-2% of the 8% hard-cap, the model MUST
+suggest a Staggered Exit:
+    - Stop A (50% of position): Strictly at the 8% mark to lock in primary gains.
+    - Stop B (50% of position): Placed at the Structural Origin (even if it reaches 9.5-10%)
+          to provide the trade "oxygen" and avoid retail shakeouts.
+- Volatility Check: If ATR > 5% of price, the model must explicitly warn if a stop is too tight
+and likely to serve as "Retail Liquidity."
+
+For each holding, specify new stop-loss levels based on the above rules, and provide a rationale for any changes.
 
     *Paste everything above into ChatGPT*
           """
