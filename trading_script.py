@@ -1531,6 +1531,8 @@ suggest a Staggered Exit:
 and likely to serve as "Retail Liquidity."
 
 For each holding, specify new stop-loss levels based on the above rules, and provide a rationale for any changes.
+In any case, you cannot set a stop loss less than 8% from the buying price. 8% loss is the maximum acceptable loss
+per ticker from buying price under this protocol, regardless of volatility or institutional origin.
 
     *Paste everything above into ChatGPT*
           """
