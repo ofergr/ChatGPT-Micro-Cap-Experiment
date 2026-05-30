@@ -1694,7 +1694,25 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
     n_obs = 0
 
     if not spx.empty and len(spx) >= 2:
-        spx = spx.reset_index().set_index("Date").sort_index()
+        spx = spx.reset_index()
+        if "Date" not in spx.columns:
+            candidate_date_cols = [
+                c for c in spx.columns
+                if str(c).lower() in {"index", "datetime", "date", "timestamp"}
+            ]
+            if candidate_date_cols:
+                spx = spx.rename(columns={candidate_date_cols[0]: "Date"})
+            else:
+                datetime_cols = [
+                    c for c in spx.columns if pd.api.types.is_datetime64_any_dtype(spx[c])
+                ]
+                if datetime_cols:
+                    spx = spx.rename(columns={datetime_cols[0]: "Date"})
+                else:
+                    spx["Date"] = pd.to_datetime(spx.index, errors="coerce")
+
+        spx["Date"] = pd.to_datetime(spx["Date"], errors="coerce")
+        spx = spx[spx["Date"].notna()].set_index("Date").sort_index()
         mkt_ret = spx["Close"].astype(float).pct_change().dropna()
 
         # Align portfolio & market returns
