@@ -1538,6 +1538,192 @@ per ticker from buying price under this protocol, regardless of volatility or in
           """
     )
 
+_C_GREEN = "\033[92m"
+_C_YELLOW = "\033[93m"
+_C_RESET = "\033[0m"
+
+
+def _detect_deposits(
+    cash_series: pd.Series,
+    trade_log_path: Path,
+    threshold: float = 50.0,
+) -> dict[pd.Timestamp, float]:
+    """Return a mapping of date → deposit amount for cash injections detected in the portfolio.
+
+    For each date, compares the actual cash change to what's explainable by trades
+    (sells add cash, buys subtract cash). Any unexplained increase above `threshold`
+    is treated as a deposit.
+    """
+    deposits: dict[pd.Timestamp, float] = {}
+    if not trade_log_path.exists() or cash_series.empty:
+        return deposits
+
+    try:
+        tlog = pd.read_csv(trade_log_path)
+    except Exception:
+        return deposits
+
+    tlog["Date"] = pd.to_datetime(tlog["Date"], errors="coerce")
+    tlog = tlog.dropna(subset=["Date"])
+
+    net_trade_cash: dict[pd.Timestamp, float] = {}
+    for _, row in tlog.iterrows():
+        d = row["Date"].normalize()
+        reason = str(row.get("Reason", ""))
+        if "SELL" in reason.upper():
+            shares = float(row["Shares Sold"]) if pd.notna(row.get("Shares Sold")) else 0.0
+            price = float(row["Sell Price"]) if pd.notna(row.get("Sell Price")) else 0.0
+            net_trade_cash[d] = net_trade_cash.get(d, 0.0) + shares * price
+        elif "BUY" in reason.upper():
+            cost = float(row["Cost Basis"]) if pd.notna(row.get("Cost Basis")) else 0.0
+            net_trade_cash[d] = net_trade_cash.get(d, 0.0) - cost
+
+    dates = cash_series.index.tolist()
+    for i in range(1, len(dates)):
+        d = dates[i]
+        d_norm = pd.Timestamp(d).normalize()
+        actual_diff = float(cash_series.iloc[i]) - float(cash_series.iloc[i - 1])
+        trade_impact = net_trade_cash.get(d_norm, 0.0)
+        unexplained = actual_diff - trade_impact
+        if unexplained > threshold:
+            deposits[d_norm] = unexplained
+
+    return deposits
+
+
+def _twr_equity(equity_series: pd.Series, deposits: dict[pd.Timestamp, float]) -> pd.Series:
+    """Return a Time-Weighted Return equity series that removes the effect of cash deposits.
+
+    Deposits are subtracted from the equity at the end of each day they occurred,
+    so the chain of returns reflects only investment performance, not capital injections.
+    Starting value is normalized to match the first equity value.
+    """
+    if equity_series.empty:
+        return equity_series.copy()
+
+    values = equity_series.values.astype(float)
+    dates = equity_series.index.tolist()
+    adjusted = np.empty(len(values))
+    adjusted[0] = values[0]
+
+    for i in range(1, len(values)):
+        d_norm = pd.Timestamp(dates[i]).normalize()
+        deposit = deposits.get(d_norm, 0.0)
+        organic_end = values[i] - deposit
+        daily_return = (organic_end / values[i - 1]) - 1.0 if values[i - 1] != 0 else 0.0
+        adjusted[i] = adjusted[i - 1] * (1.0 + daily_return)
+
+    return pd.Series(adjusted, index=equity_series.index)
+
+
+def _slope_char(prev_r: int | None, cur_r: int) -> str:
+    if prev_r is None or cur_r == prev_r:
+        return "-"
+    return "/" if cur_r < prev_r else "\\"
+
+
+def _text_performance_chart(
+    equity_series: pd.Series,
+    spx_df: pd.DataFrame,
+    chart_width: int = 55,
+    height: int = 16,
+) -> list[str]:
+    """Return lines for a text-based portfolio vs S&P 500 chart (last 6 months, indexed to 100)."""
+    end = equity_series.index.max()
+    start = end - pd.DateOffset(months=6)
+
+    port = equity_series[equity_series.index >= start].copy()
+    if len(port) < 2:
+        return []
+
+    port_norm = (port / port.iloc[0]) * 100.0
+
+    spx_norm: pd.Series | None = None
+    if spx_df is not None and not spx_df.empty and "Close" in spx_df.columns:
+        spx_close = spx_df["Close"].astype(float)
+        spx_filtered = spx_close[spx_close.index >= start]
+        if not spx_filtered.empty:
+            combined_idx = port_norm.index.union(spx_filtered.index)
+            spx_aligned = spx_filtered.reindex(combined_idx).ffill().reindex(port_norm.index)
+            first_val = float(spx_aligned.iloc[0]) if pd.notna(spx_aligned.iloc[0]) else 0.0
+            if first_val != 0.0:
+                spx_norm = (spx_aligned / first_val) * 100.0
+
+    all_vals: list[float] = list(port_norm.values)
+    if spx_norm is not None:
+        all_vals += [float(v) for v in spx_norm.values if pd.notna(v)]
+    y_min = min(all_vals)
+    y_max = max(all_vals)
+    pad = max((y_max - y_min) * 0.08, 1.0)
+    y_min -= pad
+    y_max += pad
+    y_range = y_max - y_min
+
+    dates = port_norm.index.tolist()
+    n = len(dates)
+
+    def to_col(i: int) -> int:
+        return int(round(i / max(n - 1, 1) * (chart_width - 1)))
+
+    def to_row(val: float) -> int:
+        return height - 1 - int(round((val - y_min) / y_range * (height - 1)))
+
+    grid = [[" "] * chart_width for _ in range(height)]
+    occupied = [[False] * chart_width for _ in range(height)]
+
+    prev_r: int | None = None
+    for i, val in enumerate(port_norm.values):
+        c = to_col(i)
+        r = max(0, min(height - 1, to_row(float(val))))
+        ch = _slope_char(prev_r, r)
+        grid[r][c] = f"{_C_GREEN}{ch}{_C_RESET}"
+        occupied[r][c] = True
+        prev_r = r
+
+    if spx_norm is not None:
+        for i, val in enumerate(spx_norm.values):
+            if pd.isna(val):
+                continue
+            c = to_col(i)
+            r = max(0, min(height - 1, to_row(float(val))))
+            if not occupied[r][c]:
+                grid[r][c] = f"{_C_YELLOW}.{_C_RESET}"
+
+    y_label_w = 7
+    lines: list[str] = []
+    for ri in range(height):
+        val_at = y_max - ri / max(height - 1, 1) * y_range
+        label = f"{val_at:.0f}%"
+        lines.append(f"{label:>{y_label_w}} │{''.join(grid[ri])}")
+
+    lines.append(" " * y_label_w + " └" + "─" * chart_width)
+
+    x_chars = [" "] * chart_width
+    prev_month: tuple[int, int] | None = None
+    for i, d in enumerate(dates):
+        mk = (d.year, d.month)
+        if mk != prev_month:
+            c = to_col(i)
+            label = d.strftime("%b")
+            for j, ch in enumerate(label):
+                if c + j < chart_width:
+                    x_chars[c + j] = ch
+            prev_month = mk
+    lines.append(" " * (y_label_w + 2) + "".join(x_chars))
+
+    port_ret = float(port_norm.iloc[-1]) - 100.0
+    psign = "+" if port_ret >= 0 else ""
+    legend = f"  {_C_GREEN}-/\\ Portfolio ({psign}{port_ret:.1f}%){_C_RESET}"
+    if spx_norm is not None:
+        spx_ret = float(spx_norm.iloc[-1]) - 100.0
+        ssign = "+" if spx_ret >= 0 else ""
+        legend += f"   {_C_YELLOW}. S&P 500 ({ssign}{spx_ret:.1f}%){_C_RESET}"
+    lines.append("")
+    lines.append(legend)
+
+    return lines
+
+
 def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: float, show_weekly_prompt: bool = False) -> None:
     """Print daily price updates and performance metrics (incl. CAPM)."""
     # Handle both DataFrame and list[dict] input
@@ -1800,6 +1986,13 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
         except Exception:
             pass
     print(f"{'Cash Balance:':32} ${cash:>14,.2f}")
+
+    print("\n[ 6-Month Performance ]")
+    cash_series = totals.set_index("Date")["Cash Balance"].astype(float).sort_index()
+    deposits = _detect_deposits(cash_series, TRADE_LOG_CSV)
+    adj_equity = _twr_equity(equity_series, deposits)
+    for line in _text_performance_chart(adj_equity, spx_norm):
+        print(line)
 
     # Show today's transactions to explain cash changes
     print("\n[ Today's Transactions ]")
