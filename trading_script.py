@@ -1447,16 +1447,24 @@ def print_weekly_instructions() -> None:
     """Print the LLM instructions section."""
     print("\n[ Your Instructions ]")
     print("""
-"As a senior equity analyst, reevaluate this portfolio: (insert [Holdings] & [Snapshot]).
+As a senior equity analyst, reevaluate this portfolio: (insert [Holdings] & [Snapshot]).
 Mandate: Maximize Alpha via the 'Institutional Opportunity Cost' principle.
-- 1. Scan for Step-Changes: Identify candidates (>$500M cap) with recent $2\\sigma$ volume
-spikes and fundamental catalysts (Earnings beats >15%, supply-side shocks, or 18A-tier tech breakthroughs).
+
+CRITICAL PORTFOLIO CONSTRAINTS:
+- Do not suggest any transaction that breaches the mandatory 10% Cash Reserve floor.
+- Maintain a hyper-concentrated structure of exactly 5–6 stocks. No diworsification.
+- NVDA is strictly the benchmark hurdle. Never suggest buying or selling NVDA.
+
+RESEARCH PROTOCOL:
+- 1. Scan for Step-Changes: Identify candidates (>$500M cap) with recent 2σ volume spikes and fundamental catalysts
+  (Earnings beats >15%, supply-side shocks, or 18A-tier tech breakthroughs).
 - 2. Momentum Filter: Exclude stocks ranging for 3+ months. Prioritize vertical breakouts over 'value' plays.
-- 3. The Bar is Higher: A new candidate must show higher institutional accumulation velocity than the
- current weakest holding.
-- 4. Risk Calibration: Apply the 'Staggered 8%' Protocol to all suggestions, identifying the
-'Institutional Origin' for stop-loss placement.
-- 5. Execution: Suggest specific Buy/Sell/Rotate actions to maintain a 5-6 stock 'Infrastructure Scarcity' tilt."
+- 3. The Bar is Higher: A new candidate must show higher institutional accumulation velocity than the current weakest holding.
+  If no current holding is underperforming the S&P 500, the default directive is to HOLD the incumbents to avoid retail churn.
+- 4. Risk Calibration: Apply the 'Staggered 8%' Protocol to all suggestions, identifying the 'Institutional Origin' for
+  stop-loss placement. Maximum risk per trade must not violate a 2% total portfolio equity risk ceiling.
+- 5. Execution: Suggest specific Buy/Sell/Rotate actions only if a clear Relative Strength Swap is justified against a
+  lagging incumbent. Deliver an updated, mathematically accurate [Holdings] and [Snapshot] table matching the new allocation.
 
 Remember: your primary goal is Alpha.
 
