@@ -29,6 +29,8 @@ import yfinance as yf
 import json
 import logging
 
+from market_enrichment import build_market_enrichment
+
 # Optional pandas-datareader import for Stooq access
 try:
     import pandas_datareader.data as pdr
@@ -1437,6 +1439,29 @@ If this is a mistake, enter 1, or hit Enter."""
 # ------------------------------
 # Reporting / Metrics
 # ------------------------------
+def _print_market_data_section(portfolio_dict: list[dict[str, Any]]) -> None:
+    """Print fundamentals + news sentiment for current holdings.
+
+    Uses Alpha Vantage's OVERVIEW/NEWS_SENTIMENT endpoints only (their own
+    server-side NLP) -- no AI/LLM call is made. Silently skipped if
+    ALPHA_VANTAGE_API_KEY isn't set in the environment/.env file.
+    """
+    tickers = sorted({
+        str(s["ticker"]).upper() for s in portfolio_dict
+        if float(s.get("shares", 0) or 0) > 0
+    })
+    if not tickers:
+        return
+    api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+    if not api_key:
+        return
+    est_seconds = len(tickers) * 2 * 12.5
+    print(f"\nFetching market data for {len(tickers)} ticker(s) from Alpha Vantage (~{est_seconds:.0f}s)...")
+    block = build_market_enrichment(tickers, api_key)
+    if block:
+        print("\n" + block)
+
+
 def set_prompt(weekly=False):
     if (weekly==True):
         print_weekly_instructions()
@@ -1742,7 +1767,12 @@ def _text_performance_chart(
     return lines
 
 
-def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: float, show_weekly_prompt: bool = False) -> None:
+def daily_results(
+    chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]],
+    cash: float,
+    show_weekly_prompt: bool = False,
+    skip_market_data: bool = False,
+) -> None:
     """Print daily price updates and performance metrics (incl. CAPM)."""
     # Handle both DataFrame and list[dict] input
     if isinstance(chatgpt_portfolio, pd.DataFrame):
@@ -1851,6 +1881,8 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
         else:
             mdd_date_str = str(mdd_date)
         print(f"Maximum Drawdown: {max_drawdown:.2%} (on {mdd_date_str})")
+        if not skip_market_data:
+            _print_market_data_section(portfolio_dict)
         set_prompt(show_weekly_prompt)
         return
 
@@ -2106,6 +2138,8 @@ def daily_results(chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]], cash: 
     else:
         print("No current holdings to display.")
 
+    if not skip_market_data:
+        _print_market_data_section(portfolio_dict)
     set_prompt(args.weekly)
 
 
@@ -2451,14 +2485,18 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     return current_positions, cash
 
 
-def main(data_dir: Path | None = None, show_weekly_prompt: bool = False) -> None:
+def main(
+    data_dir: Path | None = None,
+    show_weekly_prompt: bool = False,
+    skip_market_data: bool = False,
+) -> None:
     """Check versions, then run the trading script."""
     if data_dir is not None:
         set_data_dir(data_dir)
 
     chatgpt_portfolio, cash = load_latest_portfolio_state()
     chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash, override_cash_value=OVERRIDE_CASH)
-    daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt)
+    daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt, skip_market_data=skip_market_data)
 
 
 if __name__ == "__main__":
@@ -2475,6 +2513,8 @@ if __name__ == "__main__":
     parser.add_argument("--set-cash", type=float, default=None,
                        help="Override the calculated cash balance with a specific amount (e.g., --set-cash 273.00)")
     parser.add_argument("--weekly", action="store_true", default=False, help="Present weekly prompt")
+    parser.add_argument("--skip-market-data", action="store_true", default=False,
+                       help="Skip Alpha Vantage fundamentals/news section (faster, less API usage)")
     args = parser.parse_args()
 
 
@@ -2501,4 +2541,8 @@ if __name__ == "__main__":
     if args.set_cash is not None:
         set_override_cash(args.set_cash)
 
-    main(Path(args.data_dir) if args.data_dir else None, show_weekly_prompt=args.weekly)
+    main(
+        Path(args.data_dir) if args.data_dir else None,
+        show_weekly_prompt=args.weekly,
+        skip_market_data=args.skip_market_data,
+    )

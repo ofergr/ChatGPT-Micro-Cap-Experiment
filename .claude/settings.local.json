@@ -5,7 +5,10 @@
       "Bash(npx claude-mem-worker:*)",
       "Bash(npx @thedotmack/claude-mem worker:*)",
       "Skill(claude-mem:troubleshoot)",
-      "Bash(npm outdated:*)"
+      "Bash(npm outdated:*)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl *)"
     ],
     "deny": [],
     "ask": []

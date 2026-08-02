@@ -21,6 +21,7 @@ from trading_script import (
     process_portfolio, daily_results, load_latest_portfolio_state,
     set_data_dir, PORTFOLIO_CSV, TRADE_LOG_CSV, last_trading_date
 )
+from market_enrichment import build_market_enrichment
 
 try:
     import openai
@@ -29,23 +30,30 @@ except ImportError:
     HAS_OPENAI = False
 
 
-def generate_trading_prompt(portfolio_df: pd.DataFrame, cash: float, total_equity: float) -> str:
+def generate_trading_prompt(
+    portfolio_df: pd.DataFrame,
+    cash: float,
+    total_equity: float,
+    market_data: str = "",
+) -> str:
     """Generate a trading prompt with current portfolio data"""
-    
+
     # Format holdings
     if portfolio_df.empty:
         holdings_text = "No current holdings"
     else:
         holdings_text = portfolio_df.to_string(index=False)
-    
+
     # Get current date
     today = last_trading_date().date().isoformat()
-    
+
+    market_data_section = f"\n{market_data}\n" if market_data else ""
+
     prompt = f"""You are a professional portfolio analyst. Here is your current portfolio state as of {today}:
 
 [ Holdings ]
 {holdings_text}
-
+{market_data_section}
 [ Snapshot ]
 Cash Balance: ${cash:,.2f}
 Total Equity: ${total_equity:,.2f}
@@ -165,7 +173,13 @@ def execute_automated_trades(trades: List[Dict[str, Any]], portfolio_df: pd.Data
     return portfolio_df, cash
 
 
-def run_automated_trading(api_key: str, model: str = "gpt-4", data_dir: str = "Start Your Own", dry_run: bool = False):
+def run_automated_trading(
+    api_key: str,
+    model: str = "gpt-4",
+    data_dir: str = "Start Your Own",
+    dry_run: bool = False,
+    skip_market_data: bool = False,
+):
     """Run the automated trading process"""
     
     print("=== Automated Trading System ===")
@@ -187,9 +201,20 @@ def run_automated_trading(api_key: str, model: str = "gpt-4", data_dir: str = "S
     total_equity = cash + total_value
     
     print(f"Portfolio loaded: ${cash:,.2f} cash, ${total_equity:,.2f} total equity")
-    
+
+    # Fetch fundamentals + news sentiment (Alpha Vantage data only, no AI key)
+    market_data = ""
+    if not skip_market_data and not portfolio_df.empty and "ticker" in portfolio_df.columns:
+        av_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+        if av_key:
+            tickers = sorted(set(portfolio_df["ticker"].astype(str).str.upper()))
+            print(f"Fetching market data for {len(tickers)} ticker(s) from Alpha Vantage...")
+            market_data = build_market_enrichment(tickers, av_key)
+        else:
+            print("ALPHA_VANTAGE_API_KEY not set, skipping market data enrichment.")
+
     # Generate prompt
-    prompt = generate_trading_prompt(portfolio_df, cash, total_equity)
+    prompt = generate_trading_prompt(portfolio_df, cash, total_equity, market_data)
     print(f"\nGenerated prompt ({len(prompt)} characters)")
     
     # Call LLM
@@ -244,21 +269,24 @@ def main():
     parser.add_argument("--model", default="gpt-4", help="OpenAI model to use")
     parser.add_argument("--data-dir", default="Start Your Own", help="Data directory")
     parser.add_argument("--dry-run", action="store_true", help="Don't execute trades, just show recommendations")
-    
+    parser.add_argument("--skip-market-data", action="store_true",
+                         help="Skip Alpha Vantage fundamentals/news enrichment (faster, less API usage)")
+
     args = parser.parse_args()
-    
+
     # Get API key
     api_key = args.api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         print("Error: OpenAI API key required. Set OPENAI_API_KEY env var or use --api-key")
         return
-    
+
     # Run automated trading
     run_automated_trading(
         api_key=api_key,
         model=args.model,
         data_dir=args.data_dir,
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
+        skip_market_data=args.skip_market_data,
     )
 
 
