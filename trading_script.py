@@ -1507,75 +1507,49 @@ Alpha Recovery Phase: close the performance gap vs. SPY and outperform the
 benchmark by any means necessary.
 
 CRITICAL CONSTRAINTS — DO NOT VIOLATE:
-1. STATIC STATE LOCK: Do not execute any automated buys, sells, or re-allocations unless 
-   explicitly directed by the user or a hard stop-loss is breached. Avoid retail churn.
-2. PORTFOLIO CAPS: Maintain a hyper-concentrated structure of exactly 5–6 high-conviction tickers. 
-3. CASH BUFFER: Maintain a strict 10% cash reserve floor at all times to protect against 
-   systematic drawdowns. No transaction may reduce cash below this floor.
-4. MONDAY BENCHMARK HURDLE: Every Monday, any holding that has underperformed SPY over a 
-   trailing 2-week window must be explicitly flagged for a Mandatory Review for Exit rather 
-   than being automatically rolled over.
+1. STATIC STATE LOCK: Do not execute automated trades unless user-directed or hard stop-loss is breached. Avoid churn.
+2. PORTFOLIO CAPS: Maintain a hyper-concentrated structure of exactly 5–6 high-conviction tickers.
+3. CASH BUFFER: Maintain a strict 10% cash reserve floor at all times. Uninvested cash above 10% is drag and must be deployed.
+4. MONDAY BENCHMARK HURDLE: On Mondays, any holding underperforming SPY over 2 weeks must undergo Mandatory Review for Exit.
 
-### 1. The "Step-Change" Flexibility Protocol
-- The 10-Day Suspension: The mandatory 10-day holding period is formally
-suspended. Rotate capital immediately to capture momentum or escape traps.
-- The 3-Day Rule: No exit on volatility alone unless trend is violated for
-3 consecutive sessions, or a fundamental Step-Change Event occurs.
-- Relative Strength Swap: Prioritize Vertical Breakouts. If a holding lags
-SPY while a Watch List candidate accelerates, execute rotation immediately.
+1. The "Step-Change" Flexibility Protocol
+- The 10-Day Suspension: Mandatory 10-day holding period is suspended. Rotate capital immediately to capture momentum.
+-The 3-Day Rule: No exit on volatility alone unless trend is violated for 3 consecutive sessions or a Step-Change occurs.
+- Relative Strength Swap: Prioritize Vertical Breakouts. If a holding lags SPY, execute rotation immediately.
 
-### 2. Strategic Priorities & Selection Principles
-- The "Institutional Opportunity Cost" Mandate: Capital is a finite resource.
- A trade is only valid if it possesses a Structural Step-Change Catalyst
-(e.g., earnings blowout, supply-side shock, or $2\\sigma$ volume spike) that
-creates immediate alpha. To replace an existing holding, the candidate must
-demonstrate a higher velocity of institutional accumulation; otherwise, the default
-action is to hold the incumbent and avoid the friction of "Retail Churn."
-- The "Silicon Shield" Mandate: Favor U.S. domestic manufacturing/onshoring
-(Intel 18A, RTX) over offshore hardware during geopolitical chokepoints.
--Macro Scarcity Priority: Prioritize assets with supply-side shocks
-(Oil, Power, Interceptors) over demand-side speculation.
+2. Strategic Priorities & Selection Principles
+- The "Institutional Opportunity Cost" Mandate: Capital is finite. A trade requires a Structural Step-Change Catalyst
+(earnings blowout, supply shock, 2σ volume spike). Uninvested cash above 10% floor is always the weakest holding; deploy it.
+- The "Silicon Shield" Mandate: Favor U.S. domestic manufacturing/onshoring over offshore hardware during geopolitical risks.
+- Macro Scarcity Priority: Prioritize assets with supply-side shocks (Oil, Power, Interceptors) over speculation.
 
-### 3. Quantitative Gatekeepers (Mandatory Filters)
-- Moving Average Gatekeeper: No entry permitted if the ticker is trading
-below its 50-day moving average, regardless of news quality.
-- Volatility Calibration: If ATR is >2σ above the 20-day mean, delay entry
-for 48 hours (The 3-Day Rule) for consolidation.
-- Dealer Gamma Check: Do not enter a vertical breakout if price is within
-2% of a significant Call Wall (potential gamma flip resistance).
+3. Quantitative Gatekeepers (Mandatory Filters)
+- Moving Average Gatekeeper: No entry permitted if ticker is trading below its 50-day moving average.
+- Volatility Calibration: If ATR is >2σ above 20-day mean, delay entry 48 hours for consolidation unless a Step-Change occurs.
+- Dealer Gamma Check: Do not enter vertical breakout if price is within 2% of significant Call Wall resistance.
 
-### 4. Constraints & Verification
-- Portfolio Structure: Maintain 5-6 stocks and a 10% cash reserve.
-Allocation is a flexible guideline; do not hard-cap high-conviction ideas.
-- Benchmark Exclusion: NVDA is the benchmark. Never buy or sell NVDA.
-- Vibe Coding Test: For SaaS, if a task can be automated by LLMs, the
-entry bar is doubled. Verify guidance via alternative data/web traffic.
+4. Constraints & Verification
+- Portfolio Structure: Maintain 5-6 stocks and a 10% cash reserve floor. Allocation is a flexible guideline.
+- Benchmark Exclusion: NVDA is the benchmark hurdle. Never suggest buying or selling NVDA.
+- Vibe Coding Test: For SaaS, if tasks can be automated by LLMs, double entry bar. Verify via alternative data.
 
-### 5. Execution & Reporting Standards
-- Watch List First: Check the Watch List for replacement candidates before
-scanning the broader market.
-- Mandatory Analysis: Include business model thesis, revenue/margin
-outlook, and a clear distinction between Signal and Noise.
-- Benchmark Hurdle: On Mondays, any holding underperforming SPY for two
-weeks undergoes Mandatory Review for exit.
-- Clear Directives: Conclude with: Buy, Increase, Hold, Reduce, or Exit,
-alongside updated [Holdings] and [Snapshot] tables.
+5. Execution & Reporting Standards
+- Watch List First: Check Watch List for replacement candidates before scanning broader market.
+- Mandatory Analysis: Include thesis, revenue/margin outlook, and a clear distinction between Signal and Noise.
+- Benchmark Hurdle: On Mondays, holdings underperforming SPY for two weeks undergo Mandatory Review for Exit.
+- Clear Directives: Conclude with Buy, Increase, Hold, Reduce, or Exit, alongside accurate [Holdings] and [Snapshot] tables.
 
-### 6. The "Staggered 8%" Protocol
-- Primary Guardrail: The standard stop-loss is capped at 8% from the current session close to protect capital.
-- The "Institutional Origin" Soft-Pivot: For high-alpha names with vertical momentum
-(e.g., SNDK, BE), identify the Institutional Origin (the floor where the heavy buying volume began).
-- Staggered Exit: If the structural floor (Origin) is within 1-2% of the 8% hard-cap, the model MUST
-suggest a Staggered Exit:
-    - Stop A (50% of position): Strictly at the 8% mark to lock in primary gains.
-    - Stop B (50% of position): Placed at the Structural Origin (even if it reaches 9.5-10%)
-          to provide the trade "oxygen" and avoid retail shakeouts.
-- Volatility Check: If ATR > 5% of price, the model must explicitly warn if a stop is too tight
-and likely to serve as "Retail Liquidity."
+6. The "Staggered 8%" Protocol
+- Primary Guardrail: Standard stop-loss is capped at 8% from entry price to protect capital.
+- Extended Breakout Calibration: Set 8% stop from entry and size position so total trade risk is <=2% of total equity.
+- The "Institutional Origin" Soft-Pivot: Identify the Structural Origin (floor where heavy volume began).
+- Staggered Exit: If structural floor is within 1-2% of 8% hard-cap, suggest Staggered Exit:
+    - Stop A (50% position): Strictly at 8% mark to lock primary gains.
+    - Stop B (50% position): At Structural Origin (up to 10%) to provide oxygen and avoid retail shakeouts.
+- Volatility Check: If ATR > 5% of price, warn if stop is too tight and likely to serve as Retail Liquidity.
 
-For each holding, specify new stop-loss levels based on the above rules, and provide a rationale for any changes.
-In any case, you cannot set a stop loss less than 8% from the buying price. 8% loss is the maximum acceptable loss
-per ticker from buying price under this protocol, regardless of volatility or institutional origin.
+For each holding, specify new stop-loss levels based on above rules and provide rationale. Maximum loss per ticker is 8%
+from entry price under this protocol.
 
     *Paste everything above into ChatGPT*
           """
