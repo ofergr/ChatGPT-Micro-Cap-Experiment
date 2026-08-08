@@ -1771,7 +1771,7 @@ def daily_results(
     chatgpt_portfolio: pd.DataFrame | list[dict[str, Any]],
     cash: float,
     show_weekly_prompt: bool = False,
-    skip_market_data: bool = False,
+    add_market_data: bool = False,
 ) -> None:
     """Print daily price updates and performance metrics (incl. CAPM)."""
     # Handle both DataFrame and list[dict] input
@@ -1881,7 +1881,7 @@ def daily_results(
         else:
             mdd_date_str = str(mdd_date)
         print(f"Maximum Drawdown: {max_drawdown:.2%} (on {mdd_date_str})")
-        if not skip_market_data:
+        if add_market_data:
             _print_market_data_section(portfolio_dict)
         set_prompt(show_weekly_prompt)
         return
@@ -2138,7 +2138,7 @@ def daily_results(
     else:
         print("No current holdings to display.")
 
-    if not skip_market_data:
+    if add_market_data:
         _print_market_data_section(portfolio_dict)
     set_prompt(args.weekly)
 
@@ -2488,7 +2488,7 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
 def main(
     data_dir: Path | None = None,
     show_weekly_prompt: bool = False,
-    skip_market_data: bool = False,
+    add_market_data: bool = False,
 ) -> None:
     """Check versions, then run the trading script."""
     if data_dir is not None:
@@ -2496,7 +2496,7 @@ def main(
 
     chatgpt_portfolio, cash = load_latest_portfolio_state()
     chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash, override_cash_value=OVERRIDE_CASH)
-    daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt, skip_market_data=skip_market_data)
+    daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt, add_market_data=add_market_data)
 
 
 if __name__ == "__main__":
@@ -2513,8 +2513,8 @@ if __name__ == "__main__":
     parser.add_argument("--set-cash", type=float, default=None,
                        help="Override the calculated cash balance with a specific amount (e.g., --set-cash 273.00)")
     parser.add_argument("--weekly", action="store_true", default=False, help="Present weekly prompt")
-    parser.add_argument("--skip-market-data", action="store_true", default=False,
-                       help="Skip Alpha Vantage fundamentals/news section (faster, less API usage)")
+    parser.add_argument("--add-market-data", action="store_true", default=False,
+                       help="Fetch Alpha Vantage fundamentals/news section (slower, more API usage)")
     args = parser.parse_args()
 
 
@@ -2544,5 +2544,5 @@ if __name__ == "__main__":
     main(
         Path(args.data_dir) if args.data_dir else None,
         show_weekly_prompt=args.weekly,
-        skip_market_data=args.skip_market_data,
+        add_market_data=args.add_market_data,
     )

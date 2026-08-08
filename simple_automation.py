@@ -178,7 +178,7 @@ def run_automated_trading(
     model: str = "gpt-4",
     data_dir: str = "Start Your Own",
     dry_run: bool = False,
-    skip_market_data: bool = False,
+    add_market_data: bool = False,
 ):
     """Run the automated trading process"""
     
@@ -204,7 +204,7 @@ def run_automated_trading(
 
     # Fetch fundamentals + news sentiment (Alpha Vantage data only, no AI key)
     market_data = ""
-    if not skip_market_data and not portfolio_df.empty and "ticker" in portfolio_df.columns:
+    if add_market_data and not portfolio_df.empty and "ticker" in portfolio_df.columns:
         av_key = os.getenv("ALPHA_VANTAGE_API_KEY")
         if av_key:
             tickers = sorted(set(portfolio_df["ticker"].astype(str).str.upper()))
@@ -269,8 +269,8 @@ def main():
     parser.add_argument("--model", default="gpt-4", help="OpenAI model to use")
     parser.add_argument("--data-dir", default="Start Your Own", help="Data directory")
     parser.add_argument("--dry-run", action="store_true", help="Don't execute trades, just show recommendations")
-    parser.add_argument("--skip-market-data", action="store_true",
-                         help="Skip Alpha Vantage fundamentals/news enrichment (faster, less API usage)")
+    parser.add_argument("--add-market-data", action="store_true",
+                         help="Fetch Alpha Vantage fundamentals/news enrichment (slower, more API usage)")
 
     args = parser.parse_args()
 
@@ -286,7 +286,7 @@ def main():
         model=args.model,
         data_dir=args.data_dir,
         dry_run=args.dry_run,
-        skip_market_data=args.skip_market_data,
+        add_market_data=args.add_market_data,
     )
 
 
