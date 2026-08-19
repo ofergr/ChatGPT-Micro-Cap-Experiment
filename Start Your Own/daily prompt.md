@@ -12,11 +12,14 @@ benchmark by any means necessary.
 ### 1. The "Step-Change" Flexibility Protocol
 - The 10-Day Suspension: Mandatory 10-day holding period is suspended. Rotate capital immediately to capture momentum.
 - The 3-Day Rule: No exit on volatility alone unless trend is violated for 3 consecutive sessions or a Step-Change occurs.
-- Relative Strength Swap: Prioritize Vertical Breakouts. If a holding lags SPY, execute rotation immediately.
+- Relative Strength Swap: Prioritize Vertical Breakouts. If a holding moves sideways for 5+ sessions while a Watch List name
+accelerates, execute an immediate rotation.
 
 ### 2. Strategic Priorities & Selection Principles
-- The "Institutional Opportunity Cost" Mandate: Capital is finite. A trade requires a Structural Step-Change Catalyst
-(earnings blowout, supply shock, 2σ volume spike). Uninvested cash above 10% floor is always the weakest holding; deploy it.
+- Aggressive Capital Velocity: Uninvested cash above the 10% floor is your weakest holding. Deploy excess cash immediately
+into qualified Step-Change candidates (earnings blowout, supply shock, or 2σ volume spike).
+- Extended Breakout Sizing: Do not fear vertical gaps. Use the 2% total equity risk cap to scale position sizing down,
+setting the 8% stop relative to entry price.
 - The "Silicon Shield" Mandate: Favor U.S. domestic manufacturing/onshoring over offshore hardware during geopolitical risks.
 - Macro Scarcity Priority: Prioritize assets with supply-side shocks (Oil, Power, Interceptors) over speculation.
 
