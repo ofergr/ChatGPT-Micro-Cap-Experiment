@@ -49,5 +49,14 @@ setting the 8% stop relative to entry price.
     - Stop B (50% position): At Structural Origin (up to 10%) to provide oxygen and avoid retail shakeouts.
 - Volatility Check: If ATR > 5% of price, warn if stop is too tight and likely to serve as Retail Liquidity.
 
+### 7. Sector Diversification & Market Expansion Protocol
+- Anti-Concentration Mandate: Avoid sector concentration bias. While AI/Tech remains a core growth driver, the portfolio
+  must systematically evaluate high-alpha candidates across non-tech sectors (Industrials, Energy, Defense, Financials, Healthcare, and Materials).
+- Broad-Market Scan Rule: During weekly and mid-week scans, actively screen non-tech candidates (> $500M market cap) 
+  for Structural Step-Change Catalysts (e.g., supply-side shocks, margin expansion, commodity scarcity, or earnings beats > 15%).
+- Relative Strength Swap Across Sectors: When evaluating a candidate for a Relative Strength Swap, prioritize a non-tech 
+  vertical breakout if it demonstrates higher relative strength or lower sector correlation than a lagging incumbent.
+- Gatekeeper Applicability: All non-tech candidates must strictly pass the 50-Day Moving Average Gatekeeper and Volatility Calibration prior to any position entry.
+
 For each holding, specify new stop-loss levels based on above rules and provide rationale. Maximum loss per ticker is 8%
 from entry price under this protocol.
