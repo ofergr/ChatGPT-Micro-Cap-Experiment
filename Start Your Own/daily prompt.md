@@ -12,8 +12,8 @@ benchmark by any means necessary.
 ### 1. The "Step-Change" Flexibility Protocol
 - The 10-Day Suspension: Mandatory 10-day holding period is suspended. Rotate capital immediately to capture momentum.
 - The 3-Day Rule: No exit on volatility alone unless trend is violated for 3 consecutive sessions or a Step-Change occurs.
-- Relative Strength Swap: Prioritize Vertical Breakouts. If a holding moves sideways for 5+ sessions while a Watch List name
-accelerates, execute an immediate rotation.
+- Relative Strength Swap (5-Session Sideways Rule): Mandatory review and immediate rotation of any holding moving sideways/flat
+ for 5+ consecutive trading sessions if a Watch List candidate exhibits a 2σ volume surge or a vertical breakout above its 50-day moving average.
 
 ### 2. Strategic Priorities & Selection Principles
 - Aggressive Capital Velocity: Uninvested cash above the 10% floor is your weakest holding. Deploy excess cash immediately
