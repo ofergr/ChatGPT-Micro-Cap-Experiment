@@ -16,12 +16,13 @@ benchmark by any means necessary.
  for 5+ consecutive trading sessions if a Watch List candidate exhibits a 2σ volume surge or a vertical breakout above its 50-day moving average.
 
 ### 2. Strategic Priorities & Selection Principles
-- Aggressive Capital Velocity: Uninvested cash above the 10% floor is your weakest holding. Deploy excess cash immediately
-into qualified Step-Change candidates (earnings blowout, supply shock, or 2σ volume spike).
-- Extended Breakout Sizing: Do not fear vertical gaps. Use the 2% total equity risk cap to scale position sizing down,
-setting the 8% stop relative to entry price.
-- The "Silicon Shield" Mandate: Favor U.S. domestic manufacturing/onshoring over offshore hardware during geopolitical risks.
-- Macro Scarcity Priority: Prioritize assets with supply-side shocks (Oil, Power, Interceptors) over speculation.
+- **Aggressive Capital Velocity:** Uninvested cash above the 10% floor is your weakest holding. Deploy excess cash immediately into qualified 
+Step-Change candidates (earnings blowout, supply shock, or 2σ volume spike).
+- **Relative Strength Swap (5-Session Sideways Rule):** Mandatory review and immediate rotation of any holding moving sideways or flat for 5+ 
+consecutive trading sessions if a Watch List candidate exhibits a 2σ volume surge or a vertical breakout above its 50-day moving average.
+- **Extended Breakout Sizing:** Do not fear vertical gaps. Use the 2% total equity risk cap to scale position sizing down, setting the 8% stop relative to entry price.
+- **The "Silicon Shield" Mandate:** Favor U.S. domestic manufacturing/onshoring over offshore hardware during geopolitical risks.
+- **Macro Scarcity Priority:** Prioritize assets with supply-side shocks (Oil, Power, Interceptors) over speculation.
 
 ### 3. Quantitative Gatekeepers (Mandatory Filters)
 - Moving Average Gatekeeper: No entry permitted if ticker is trading below its 50-day moving average.
