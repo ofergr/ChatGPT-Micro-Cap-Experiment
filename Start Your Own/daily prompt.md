@@ -51,10 +51,14 @@ consecutive trading sessions if a Watch List candidate exhibits a 2σ volume sur
 - Volatility Check: If ATR > 5% of price, warn if stop is too tight and likely to serve as Retail Liquidity.
 
 ### 7. Sector Diversification & Market Expansion Protocol
-- **Anti-Concentration Mandate:** Avoid sector concentration bias. While AI/Tech remains a core growth driver, the portfolio must systematically evaluate high-alpha candidates across non-tech sectors (Industrials, Energy, Defense, Financials, Healthcare).
+- **Anti-Concentration Mandate:** Avoid sector concentration bias. While AI/Tech remains a core growth driver, the portfolio must systematically evaluate 
+  high-alpha candidates across non-tech sectors (Industrials, Energy, Defense, Financials, Healthcare).
 - **Anti-Tech Diversity & Cross-Sector Discovery Directive:**
-  1. **Tech Allocation Cap:** Tech/SaaS holdings (including AI software and semiconductor hardware) are strictly capped at a maximum of **2 slots** in the 5–6 ticker portfolio at any given time.
-  2. **Mandatory Non-Tech Screener:** Every daily and mid-week scan **must evaluate candidates outside tech**—specifically targeting Industrials/E-Infrastructure, Healthcare, Energy/Commodities, Materials, Defense, and Financials.
+  1. Cross-Sector Alpha Flexibility: Sector allocation is flexible. Maintain active discovery across non-tech sectors (Industrials, Energy, Defense, 
+     Healthcare, Financials), but do not cap Tech/SaaS slots if additional tech holdings demonstrate superior risk-adjusted alpha, volume step-changes (>2σ), 
+     and 50-day MA clearance.  
+  2. **Mandatory Non-Tech Screener:** Every daily and mid-week scan **must evaluate candidates outside tech**—specifically targeting Industrials/E-Infrastructure,
+      Healthcare, Energy/Commodities, Materials, Defense, and Financials.
   3. **Broad Market Scan Output:** During scans, present at least **two non-tech candidates** (> $500M market cap)
      demonstrating structural step-change catalysts (e.g., earnings beats > 15%, commodity supply-shocks, or margin
      expansions) that strictly clear the 50-Day Moving Average Gatekeeper before proposing any re-entry into previously held tech names.
