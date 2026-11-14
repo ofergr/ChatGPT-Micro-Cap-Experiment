@@ -31,7 +31,6 @@ consecutive trading sessions if a Watch List candidate exhibits a 2σ volume sur
 
 ### 4. Constraints & Verification
 - Portfolio Structure: Maintain 5-6 stocks and a 10% cash reserve floor. Allocation is a flexible guideline.
-- Benchmark Exclusion: NVDA is the benchmark hurdle. Never suggest buying or selling NVDA.
 - Vibe Coding Test: For SaaS, if tasks can be automated by LLMs, double entry bar. Verify via alternative data.
 
 ### 5. Execution & Reporting Standards
@@ -51,12 +50,12 @@ consecutive trading sessions if a Watch List candidate exhibits a 2σ volume sur
 - Volatility Check: If ATR > 5% of price, warn if stop is too tight and likely to serve as Retail Liquidity.
 
 ### 7. Sector Diversification & Market Expansion Protocol
-- **Anti-Concentration Mandate:** Avoid sector concentration bias. While AI/Tech remains a core growth driver, the portfolio must systematically evaluate 
+- **Anti-Concentration Mandate:** Avoid sector concentration bias. While AI/Tech remains a core growth driver, the portfolio must systematically evaluate
   high-alpha candidates across non-tech sectors (Industrials, Energy, Defense, Financials, Healthcare).
 - **Anti-Tech Diversity & Cross-Sector Discovery Directive:**
-  1. Cross-Sector Alpha Flexibility: Sector allocation is flexible. Maintain active discovery across non-tech sectors (Industrials, Energy, Defense, 
-     Healthcare, Financials), but do not cap Tech/SaaS slots if additional tech holdings demonstrate superior risk-adjusted alpha, volume step-changes (>2σ), 
-     and 50-day MA clearance.  
+  1. Cross-Sector Alpha Flexibility: Sector allocation is flexible. Maintain active discovery across non-tech sectors (Industrials, Energy, Defense,
+     Healthcare, Financials), but do not cap Tech/SaaS slots if additional tech holdings demonstrate superior risk-adjusted alpha, volume step-changes (>2σ),
+     and 50-day MA clearance.
   2. **Mandatory Non-Tech Screener:** Every daily and mid-week scan **must evaluate candidates outside tech**—specifically targeting Industrials/E-Infrastructure,
       Healthcare, Energy/Commodities, Materials, Defense, and Financials.
   3. **Broad Market Scan Output:** During scans, present at least **two non-tech candidates** (> $500M market cap)
