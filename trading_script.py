@@ -2456,6 +2456,40 @@ def rebuild_portfolio_from_trades() -> dict[str, dict[str, float]]:
     logger.info("Portfolio holdings rebuilt: %d positions", len(portfolio))
     return portfolio
 
+def _record_cash_override_as_flow(previous_cash: float, new_cash: float) -> None:
+    """Log the --set-cash delta vs. the last recorded cash balance as an external cash flow.
+
+    --set-cash is how the user reconciles the tracked cash balance with their real
+    brokerage account, so any change it introduces is, by definition, money moved in
+    or out of the account -- exactly what external_cash_flows.csv is meant to record.
+    """
+    delta = round(new_cash - previous_cash, 2)
+    if delta == 0:
+        return
+
+    flow_path = DATA_DIR / "external_cash_flows.csv"
+    today_iso = last_trading_date().date().isoformat()
+
+    if flow_path.exists():
+        flows_df = pd.read_csv(flow_path)
+    else:
+        flows_df = pd.DataFrame(columns=["Date", "Amount"])
+
+    existing_idx = flows_df.index[flows_df["Date"].astype(str) == today_iso]
+    if len(existing_idx) > 0:
+        flows_df.loc[existing_idx, "Amount"] = flows_df.loc[existing_idx, "Amount"].astype(float) + delta
+    else:
+        flows_df = pd.concat(
+            [flows_df, pd.DataFrame([{"Date": today_iso, "Amount": delta}])],
+            ignore_index=True,
+        )
+
+    flows_df.to_csv(flow_path, index=False)
+    direction = "deposit" if delta > 0 else "withdrawal"
+    print(f"Recorded external cash {direction} of ${abs(delta):,.2f} in external_cash_flows.csv ({today_iso}).")
+    logger.info("Recorded external cash flow of $%.2f on %s (via --set-cash)", delta, today_iso)
+
+
 def get_latest_cash_balance() -> float:
     """
     Get the latest cash balance, respecting the --set-cash override.
@@ -2463,10 +2497,12 @@ def get_latest_cash_balance() -> float:
     1. --set-cash override
     2. Last 'TOTAL' row in portfolio CSV
     3. 'initial_cash' from config.json
+
+    When --set-cash is used, the gap between this override and the previously
+    tracked cash balance is logged to external_cash_flows.csv as a deposit/withdrawal.
     """
-    if OVERRIDE_CASH is not None:
-        logger.info("Using --set-cash override value: $%.2f", OVERRIDE_CASH)
-        return OVERRIDE_CASH
+    previous_cash = None
+    source = "last snapshot cash checkpoint"
 
     if PORTFOLIO_CSV.exists():
         df = CSVHandler.read_portfolio_csv()
@@ -2475,14 +2511,20 @@ def get_latest_cash_balance() -> float:
             df_total["Date"] = pd.to_datetime(df_total["Date"], format="mixed", errors="coerce")
             valid_total = df_total[pd.notna(df_total["Cash Balance"])].sort_values("Date")
             if not valid_total.empty:
-                cash = float(valid_total.iloc[-1]["Cash Balance"])
-                logger.info("Using last snapshot cash checkpoint: $%.2f", cash)
-                return cash
+                previous_cash = float(valid_total.iloc[-1]["Cash Balance"])
 
-    config = load_config()
-    cash = config.get("initial_cash", 0.0)
-    logger.info("No snapshot found. Using config initial cash: $%.2f", cash)
-    return cash
+    if previous_cash is None:
+        config = load_config()
+        previous_cash = config.get("initial_cash", 0.0)
+        source = "config initial cash"
+
+    if OVERRIDE_CASH is not None:
+        logger.info("Using --set-cash override value: $%.2f", OVERRIDE_CASH)
+        _record_cash_override_as_flow(previous_cash, OVERRIDE_CASH)
+        return OVERRIDE_CASH
+
+    logger.info("Using %s: $%.2f", source, previous_cash)
+    return previous_cash
 
 
 def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], float]:

@@ -142,12 +142,16 @@ def holdings_table(holdings, prices, equity):
 
 def recent_trades(trade_log, as_of, days=14):
     """Parse the existing trade-log schema, retaining only the most recent window."""
-    cutoff = pd.Timestamp(as_of).normalize() - pd.Timedelta(days=days)
+    as_of_ts = pd.Timestamp(as_of)
+    if as_of_ts.tzinfo is not None:
+        as_of_ts = as_of_ts.tz_localize(None)  # trade log dates are naive
+    as_of_ts = as_of_ts.normalize()
+    cutoff = as_of_ts - pd.Timedelta(days=days)
     if trade_log is None or trade_log.empty:
         return []
     data = trade_log.copy()
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
-    data = data[data["Date"].between(cutoff, pd.Timestamp(as_of).normalize())].sort_values("Date")
+    data = data[data["Date"].between(cutoff, as_of_ts)].sort_values("Date")
     trades = []
     for _, row in data.iterrows():
         reason = str(row.get("Reason", ""))
@@ -216,12 +220,12 @@ def weekly_research_input(holdings, prices, cash, total_equity, trade_log, as_of
                      f"{_money(pnl)} | Research | Research | Research |")
     lines += [
         "",
-        "## E. Last 14 Days - Transaction Audit",
+        "## E. Last 4 Weeks - Transaction Audit",
         "",
         "| Date | Ticker | Action | Amount | Realized P&L | Recorded Reason | Review Finding |",
         "|---|---|---|---:|---:|---|---|",
     ]
-    trades = recent_trades(trade_log, as_of)
+    trades = recent_trades(trade_log, as_of, days=28)
     for date, ticker, action, amount, pnl, reason in trades:
         safe_reason = reason.replace("|", "/").replace("\n", " ")
         lines.append(f"| {date} | {ticker} | {action} | {_money(amount)} | "

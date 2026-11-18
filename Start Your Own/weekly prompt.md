@@ -86,10 +86,9 @@ Use supplied historical summaries for historical metrics; otherwise report that 
 Distinguish among market exposure, sector/factor exposure, stock selection, timing, position sizing, and cash drag.
 If the data is insufficient to identify the cause of underperformance, say so rather than inventing attribution.
 
-## 4. Recent Transaction Audit (Last 14 Calendar Days)
+## 4. Recent Transaction Audit (Last 4 Weeks)
 
-Extract transactions dated within the **14 calendar days ending on the report date** from the supplied report.
-The input may include a longer four-week history: retain it as context, but focus the main audit on the last 14 days.
+Extract transactions dated within the **28 calendar days ending on the report date** from the supplied report.
 
 For each recent transaction, assess:
 
@@ -100,9 +99,9 @@ For each recent transaction, assess:
 - Whether material new information supports or challenges the original thesis.
 - Any early exit, quick reversal, repeat purchase, or potentially avoidable churn worth reviewing.
 
-Do not treat a two-week loss as proof that a decision was wrong, or a two-week gain as proof that it was right.
+Do not treat a four-week loss as proof that a decision was wrong, or a four-week gain as proof that it was right.
 Evaluate the quality of the decision based on information available at the time and later thesis developments.
-If there were no transactions, explicitly say `No transactions in the last 14 calendar days`.
+If there were no transactions, explicitly say `No transactions in the last 4 weeks`.
 
 Do not ask for the full CSV. If older transaction history is necessary for a particular conclusion, identify the
 missing calculation and describe the smallest summary needed to resolve it.
@@ -127,6 +126,8 @@ than a recent breakout. Do not defend a holding simply because it is already own
 
 ## 6. Broad Market and Watchlist Deep Research
 
+Before scoring any holding or candidate, you MUST execute live market and fundamental research for every current holding, 
+every watchlist ticker, and a fresh broad-market screen. Never default to provisional scores when search tools are available.
 Search independently beyond the existing portfolio. Start with the watchlist, then investigate the broader market.
 Use current, verifiable sources rather than relying on stale research or previous rankings.
 
@@ -220,7 +221,8 @@ Produce the following sections in order. Be concise in the summary and detailed 
 - Report date and data cutoff.
 - Portfolio status in 3-5 sentences.
 - Biggest verified risk, strongest opportunity, and most important thesis change.
-- Overall directive: `NO ACTION`, `RESEARCH FURTHER`, or `PROPOSED CHANGES — APPROVAL REQUIRED`.
+- Overall directive: `NO ACTION` (keep current allocations) or `PROPOSED CHANGES — APPROVAL REQUIRED` (specific Buy, Sell, 
+  Trim, or Swap orders with exact weights and dollar amounts). Always reach a definitive decision; do not defer the decision to a future session.
 
 ### B. Data Integrity and Reconciliation
 
@@ -247,7 +249,7 @@ Use `N/A` when data is insufficient; never substitute guesses.
 
 Follow with concise holding-by-holding analysis and deeper explanations for any proposed changes.
 
-### E. Last 14 Days — Transaction Audit
+### E. Last 4 Weeks — Transaction Audit
 
 | Date | Ticker | Action | Amount | Realized P&L | Thesis / Reason | Review Finding |
 |---|---|---|---:|---:|---|---|
