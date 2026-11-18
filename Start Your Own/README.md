@@ -61,8 +61,23 @@ This script updates your portfolio and logs trades.
    - The script asks if you want to record manual buys or sells.
    - After you hit 'Enter' all calculations for the day are made.
    - Results are saved to `chatgpt_portfolio_update.csv` and any trades are added to `chatgpt_trade_log.csv`.
-   - In the terminal, daily results are printed. Copy and paste results into the LLM.
+   - In the terminal, daily results are printed and automatically copied to your clipboard (see below). Paste them into the LLM.
 To automate prompts, check out the [Automation Guide](https://github.com/LuckyOne7777/ChatGPT-Micro-Cap-Experiment/blob/main/Other/AUTOMATION_README.md)
+
+### Clipboard
+
+The daily report (not the trade prompts) is copied to the clipboard at the end of the run. Pass `--no-copy` to disable. No extra Python packages are needed.
+
+| Where you run it | How it copies | Setup |
+|------------------|---------------|-------|
+| macOS | `pbcopy` | None |
+| Windows | `clip` | None |
+| Linux (Wayland) | `wl-copy` | `sudo apt install wl-clipboard` |
+| Linux (X11) | `xclip` or `xsel` | `sudo apt install xclip` |
+| SSH, terminal supports OSC 52 (iTerm2, kitty, WezTerm, Windows Terminal, Ghostty) | Terminal escape sequence | None. Inside tmux: `set -g set-clipboard on` |
+| SSH from MobaXterm | `xclip` over forwarded X11 | Install `xclip` on the server and enable X11-Forwarding for the session. `echo $DISPLAY` should print a value. |
+
+If the script says the OSC 52 copy is unconfirmed and your paste is empty, your terminal doesn't support it (MobaXterm doesn't). Use the X11 route above or select the text with the mouse.
 ## Generate_Graph.py
 
 This script draws a graph of your portfolio versus the S&P 500.

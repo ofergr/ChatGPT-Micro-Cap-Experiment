@@ -21,6 +21,13 @@ import datetime
 from pathlib import Path
 from typing import Any, cast
 import os
+import sys
+import base64
+import contextlib
+import io
+import re
+import shutil
+import subprocess
 import warnings
 
 import numpy as np
@@ -2557,10 +2564,70 @@ def load_latest_portfolio_state() -> tuple[pd.DataFrame | list[dict[str, Any]], 
     return current_positions, cash
 
 
+class _Tee(io.TextIOBase):
+    """Write to the real stdout and keep a copy of everything written."""
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        self._buf = io.StringIO()
+
+    def write(self, s: str) -> int:
+        self._buf.write(s)
+        return self._stream.write(s)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def getvalue(self) -> str:
+        return self._buf.getvalue()
+
+
+def copy_to_clipboard(text: str) -> str | None:
+    """Copy text to the clipboard on macOS, Linux, Windows or over SSH.
+
+    Returns "native" if a clipboard tool succeeded, "osc52" if the terminal escape was sent
+    (cannot be confirmed, some terminals ignore it), or None on failure.
+    """
+    over_ssh = bool(os.environ.get("SSH_TTY") or os.environ.get("SSH_CONNECTION"))
+
+    # Over SSH a native tool would fill the *server's* clipboard, so use OSC 52 to reach the local terminal.
+    # Exception: a Linux server with a forwarded X11 display (e.g. MobaXterm) syncs xclip to the local clipboard.
+    forwarded_x11 = sys.platform.startswith("linux") and bool(os.environ.get("DISPLAY"))
+    if not over_ssh or forwarded_x11:
+        if sys.platform == "darwin":
+            candidates = [["pbcopy"]]
+        elif sys.platform.startswith("win"):
+            candidates = [["clip"]]
+        else:
+            candidates = []
+            if os.environ.get("WAYLAND_DISPLAY"):
+                candidates.append(["wl-copy"])
+            if os.environ.get("DISPLAY"):
+                candidates += [["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+        for cmd in candidates:
+            if shutil.which(cmd[0]):
+                try:
+                    subprocess.run(cmd, input=text.encode("utf-8"), check=True, timeout=5)
+                    return "native"
+                except (subprocess.SubprocessError, OSError):
+                    continue
+
+    # Fallback: OSC 52 terminal escape (works over SSH/headless in iTerm2, kitty, WezTerm, Windows Terminal, ...)
+    try:
+        payload = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        with open("/dev/tty", "w") as tty:
+            tty.write(f"\033]52;c;{payload}\a")
+            tty.flush()
+        return "osc52"
+    except OSError:
+        return None
+
+
 def main(
     data_dir: Path | None = None,
     show_weekly_prompt: bool = False,
     add_market_data: bool = False,
+    copy_report: bool = True,
 ) -> None:
     """Check versions, then run the trading script."""
     if data_dir is not None:
@@ -2568,7 +2635,22 @@ def main(
 
     chatgpt_portfolio, cash = load_latest_portfolio_state()
     chatgpt_portfolio, cash = process_portfolio(chatgpt_portfolio, cash, override_cash_value=OVERRIDE_CASH)
-    daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt, add_market_data=add_market_data)
+
+    if not copy_report:
+        daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt, add_market_data=add_market_data)
+        return
+
+    tee = _Tee(sys.stdout)
+    with contextlib.redirect_stdout(tee):
+        daily_results(chatgpt_portfolio, cash, show_weekly_prompt=show_weekly_prompt, add_market_data=add_market_data)
+    method = copy_to_clipboard(re.sub(r"\x1b\[[0-9;]*m", "", tee.getvalue()))
+    if method == "native":
+        print("\n📋 Report copied to clipboard.")
+    elif method == "osc52":
+        print("\n📋 Sent report to your terminal's clipboard (OSC 52). Unconfirmed: if paste is empty, "
+              "your terminal doesn't support it (e.g. MobaXterm) - install xclip with X11 forwarding instead.")
+    else:
+        print("\n⚠️  Could not copy report to clipboard (no clipboard tool or terminal support found).")
 
 
 if __name__ == "__main__":
@@ -2587,6 +2669,8 @@ if __name__ == "__main__":
     parser.add_argument("--weekly", action="store_true", default=False, help="Present weekly prompt")
     parser.add_argument("--add-market-data", action="store_true", default=False,
                        help="Fetch Alpha Vantage fundamentals/news section (slower, more API usage)")
+    parser.add_argument("--no-copy", action="store_true", default=False,
+                       help="Do not copy the daily report to the clipboard")
     args = parser.parse_args()
 
 
@@ -2617,4 +2701,5 @@ if __name__ == "__main__":
         Path(args.data_dir) if args.data_dir else None,
         show_weekly_prompt=args.weekly,
         add_market_data=args.add_market_data,
+        copy_report=not args.no_copy,
     )
