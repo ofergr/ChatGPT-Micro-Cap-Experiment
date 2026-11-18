@@ -1287,7 +1287,7 @@ def log_sell(
         "Reason": "AUTOMATED SELL - STOPLOSS TRIGGERED",
     }
     print(f"{ticker} stop loss was met. Selling all shares.")
-    portfolio = portfolio[portfolio["ticker"] != ticker]
+    portfolio = portfolio[portfolio["ticker"] != ticker].reset_index(drop=True)
 
     if TRADE_LOG_CSV.exists():
         logger.info("Reading CSV file: %s", TRADE_LOG_CSV)
@@ -1423,7 +1423,7 @@ If this is a mistake, enter 1, or hit Enter."""
 
 
     if total_shares == shares_sold:
-        chatgpt_portfolio = chatgpt_portfolio[chatgpt_portfolio["ticker"] != ticker]
+        chatgpt_portfolio = chatgpt_portfolio[chatgpt_portfolio["ticker"] != ticker].reset_index(drop=True)
     else:
         row_index = ticker_row.index[0]
         chatgpt_portfolio.at[row_index, "shares"] = total_shares - shares_sold
