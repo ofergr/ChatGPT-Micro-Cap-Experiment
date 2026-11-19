@@ -2120,7 +2120,26 @@ def daily_results(
 
     # New section: Performance of each held ticker since purchase
     print("\n[ Performance Since Purchase ]")
-    if portfolio_dict and len(portfolio_dict) > 0:
+    sold_today: list[dict[str, Any]] = []
+    if TRADE_LOG_CSV.exists():
+        try:
+            _log = pd.read_csv(TRADE_LOG_CSV)
+            _sells = _log[(_log["Date"] == today) & _log["Reason"].astype(str).str.contains("SELL")]
+            for _, t in _sells.iterrows():
+                sold_shares = float(t["Shares Sold"]) if pd.notna(t["Shares Sold"]) else 0.0
+                if sold_shares <= 0:
+                    continue
+                cost = float(t["Cost Basis"]) if pd.notna(t["Cost Basis"]) else 0.0
+                sold_today.append({
+                    "ticker": str(t["Ticker"]).upper(),
+                    "buy_price": cost / sold_shares,
+                    "sell_price": float(t["Sell Price"]) if pd.notna(t["Sell Price"]) else 0.0,
+                    "pnl": float(t["PnL"]) if pd.notna(t["PnL"]) else 0.0,
+                })
+        except Exception as exc:
+            logger.warning("Could not read sold positions from trade log: %s", exc)
+
+    if (portfolio_dict and len(portfolio_dict) > 0) or sold_today:
         print("Ticker    Buy Price  Current Price  Total Change    % Change")
         print("-" * 62)
 
@@ -2152,6 +2171,15 @@ def daily_results(
                     print(f"{ticker:<8}  ${buy_price:>8.2f}  ${current_price:>12.2f}  {change_sign}${total_change:>9.2f}    {pct_sign}{pct_change:>6.2f}%")
                 else:
                     print(f"{ticker:<8}  ${buy_price:>8.2f}  {'N/A':>12}  {'N/A':>10}    {'N/A':>7}")
+
+        # Positions sold today (shown only on the day of the sale)
+        for sold in sold_today:
+            total_change = sold["sell_price"] - sold["buy_price"]
+            pct_change = (total_change / sold["buy_price"] * 100) if sold["buy_price"] > 0 else 0
+            change_sign = "+" if total_change >= 0 else ""
+            pct_sign = "+" if pct_change >= 0 else ""
+            pnl_sign = "+" if sold["pnl"] >= 0 else "-"
+            print(f"{sold['ticker']:<8}  ${sold['buy_price']:>8.2f}  ${sold['sell_price']:>12.2f}  {change_sign}${total_change:>9.2f}    {pct_sign}{pct_change:>6.2f}%  SOLD (PnL: {pnl_sign}${abs(sold['pnl']):.2f})")
     else:
         print("No current holdings to display.")
 
