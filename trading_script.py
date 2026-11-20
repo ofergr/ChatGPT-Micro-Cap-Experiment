@@ -1494,7 +1494,6 @@ def print_weekly_instructions() -> None:
         print(f"\n(Could not load weekly prompt from {path}: {exc})")
         prompt = _FALLBACK_WEEKLY_PROMPT
     print("\n" + prompt)
-    print("\n    *Paste everything above into ChatGPT*\n")
 
 DAILY_PROMPT_FILE = Path("Start Your Own") / "daily prompt.md"
 
@@ -1509,7 +1508,6 @@ def print_daily_instructions() -> None:
         print(f"\n(Could not load daily prompt from {path}: {exc})")
         return
     print("\n" + prompt)
-    print("\n    *Paste everything above into ChatGPT*\n")
 
 
 def print_weekly_transactions_table(weeks: int = 4, as_of: pd.Timestamp | None = None) -> None:
